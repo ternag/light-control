@@ -1,0 +1,18 @@
+{
+  // Multi-root workspace for the light-control monorepo.
+  // Open this file in VS Code (File > Open Workspace from File...) to get every
+  // sub-project in one window. PlatformIO activates for the "firmware" folder.
+  "folders": [
+    {
+      "name": "firmware (ESP32-C3)",
+      "path": "firmware"
+    },
+    {
+      "name": "light-control (root)",
+      "path": "."
+    }
+    // Add the server here once it exists, e.g.:
+    // { "name": "server", "path": "server" }
+  ],
+  "settings": {}
+}

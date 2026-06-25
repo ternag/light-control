@@ -1,0 +1,112 @@
+:root {
+  --bg: #0f1115;
+  --panel: #181b22;
+  --line: #272b34;
+  --text: #e6e8ee;
+  --muted: #8b91a0;
+  --accent: #4ea1ff;
+  --firmware: #ffb454;
+  --server: #6ad29b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 1.5rem;
+  color: var(--muted);
+}
+
+.error {
+  color: #ff6b6b;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.peer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.peer.is-self {
+  border-color: var(--accent);
+}
+
+.badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+  color: #0f1115;
+  font-weight: 600;
+}
+
+.badge-firmware {
+  background: var(--firmware);
+}
+
+.badge-server {
+  background: var(--server);
+}
+
+.name {
+  font-weight: 600;
+}
+
+.you {
+  font-size: 0.7rem;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.05rem 0.35rem;
+}
+
+.addr {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+
+.seen {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-width: 4.5rem;
+  text-align: right;
+}
