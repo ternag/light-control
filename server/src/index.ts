@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { createRoster } from "./roster.js";
 import { startMdns } from "./mdns.js";
 import { startLiveness } from "./liveness.js";
-import { startHttp } from "./server.js";
+import { startHttp, type HttpOptions } from "./server.js";
+import { startReleaseWatcher } from "./release.js";
+import { detectWebVersion } from "./version.js";
 import type { PeerInfo } from "./types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -16,6 +18,7 @@ const name = process.env.NODE_NAME ?? `server-${hostname()}`;
 const port = Number(process.env.PORT ?? 8080);
 // A peer drops off this long after it stops answering liveness probes.
 const ttlMs = Number(process.env.PEER_TTL_MS ?? 6_000);
+const repo = process.env.GH_REPO ?? "ternag/light-control";
 
 const self: PeerInfo = {
   id: randomUUID(),
@@ -24,16 +27,19 @@ const self: PeerInfo = {
   host: hostname().endsWith(".local") ? hostname() : `${hostname()}.local`,
   address: primaryIpv4(),
   port,
+  version: detectWebVersion(),
 };
 
 const roster = createRoster(self, { ttlMs });
 const mdns = startMdns(self);
 // mDNS discovers candidates; HTTP probes decide who's actually alive in the roster.
 const stopLiveness = startLiveness(roster, mdns.getCandidates, { intervalMs: 2000, timeoutMs: 1000 });
+const releases = startReleaseWatcher(repo);
 
 // Serve the built PWA if it exists (../app/dist), else run API-only.
 const staticDir = resolve(here, "../../app/dist");
-const httpOptions = existsSync(staticDir) ? { port, staticDir } : { port };
+const httpOptions: HttpOptions = { port, getLatestFirmware: releases.getLatest };
+if (existsSync(staticDir)) httpOptions.staticDir = staticDir;
 const server = startHttp(roster, httpOptions);
 
 console.log(`[light-control] "${name}" (${self.id.slice(0, 8)}) listening on :${port}`);
@@ -47,6 +53,7 @@ function shutdown() {
   console.log("\n[light-control] shutting down…");
   stopLiveness();
   mdns.stop();
+  releases.stop();
   server.close();
   process.exit(0);
 }
