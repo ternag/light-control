@@ -110,3 +110,18 @@ h1 {
   min-width: 4.5rem;
   text-align: right;
 }
+
+.version {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-tag {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  background: var(--firmware);
+  color: #0f1115;
+  font-weight: 600;
+}
