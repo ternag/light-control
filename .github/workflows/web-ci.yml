@@ -1,0 +1,31 @@
+name: web-ci
+on:
+  push:
+    paths: ["server/**", "app/**", ".github/workflows/web-ci.yml"]
+  pull_request:
+    paths: ["server/**", "app/**", ".github/workflows/web-ci.yml"]
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: server
+      - run: npx vitest run
+        working-directory: server
+      - run: npx tsc --noEmit
+        working-directory: server
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: app
+      - run: npm run build
+        working-directory: app

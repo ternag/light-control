@@ -1,0 +1,25 @@
+name: firmware-release
+on:
+  push:
+    tags: ["fw-v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - run: cp firmware/include/secrets.example.h firmware/include/secrets.h
+      - run: pio run -d firmware
+      - name: Stage binary
+        run: cp firmware/.pio/build/esp32-c3/firmware.bin "firmware-${{ github.ref_name }}.bin"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "firmware-${{ github.ref_name }}.bin"
