@@ -8,4 +8,11 @@ export interface RosterEntry {
   port: number;
   lastSeen: string;
   self: boolean;
+  version: string;
+}
+
+export interface FirmwareLatest {
+  version: string;
+  binUrl: string;
+  publishedAt: string;
 }

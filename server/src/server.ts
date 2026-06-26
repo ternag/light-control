@@ -2,11 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import type { Roster } from "./roster.js";
+import type { FirmwareRelease } from "./release.js";
 
 export interface HttpOptions {
   port: number;
   /** Directory of the built PWA to serve at `/`. Optional. */
   staticDir?: string;
+  /** Latest published firmware release, for GET /api/firmware/latest. */
+  getLatestFirmware?: () => FirmwareRelease | null;
 }
 
 const MIME: Record<string, string> = {
@@ -37,6 +40,11 @@ async function handle(
 
   if (url.pathname === "/api/peers") {
     sendJson(res, 200, roster.list(Date.now()));
+    return;
+  }
+
+  if (url.pathname === "/api/firmware/latest") {
+    sendJson(res, 200, options.getLatestFirmware?.() ?? null);
     return;
   }
 

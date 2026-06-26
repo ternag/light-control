@@ -9,6 +9,7 @@ const self: PeerInfo = {
   host: "server-1.local",
   address: "192.168.1.10",
   port: 8080,
+  version: "v0.1.0",
 };
 
 const tractor: PeerInfo = {
@@ -18,6 +19,7 @@ const tractor: PeerInfo = {
   host: "tractor.local",
   address: "192.168.1.42",
   port: 80,
+  version: "v0.2.0",
 };
 
 describe("roster", () => {

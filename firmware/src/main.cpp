@@ -6,6 +6,10 @@
 
 #include "secrets.h"
 
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "unknown"
+#endif
+
 // ---------------------------------------------------------------------------
 // light-control firmware node — v1 "discovery" walking skeleton.
 //
@@ -59,6 +63,7 @@ static String rosterJson() {
   self["host"] = String(g_name) + ".local";
   self["address"] = WiFi.localIP().toString();
   self["port"] = HTTP_PORT;
+  self["version"] = FIRMWARE_VERSION;
   self["self"] = true;
 
   for (const Peer &p : g_peers) {
@@ -154,6 +159,7 @@ static void startMdns() {
   MDNS.addServiceTxt(SERVICE, "tcp", "name", g_name);
   MDNS.addServiceTxt(SERVICE, "tcp", "type", "firmware");
   MDNS.addServiceTxt(SERVICE, "tcp", "proto", PROTO_VERSION);
+  MDNS.addServiceTxt(SERVICE, "tcp", "fw", FIRMWARE_VERSION);
   Serial.printf("Announced as %s.local (id %s)\n", g_name.c_str(), g_id.c_str());
 }
 
@@ -197,6 +203,7 @@ void setup() {
   setLed(false);
   delay(500); // let the USB-CDC port enumerate on the host
   Serial.println("\nlight-control firmware: boot OK");
+  Serial.printf("firmware version: %s\n", FIRMWARE_VERSION);
 
   connectWifi();
   startMdns();

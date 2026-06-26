@@ -26,6 +26,7 @@ export function startMdns(self: PeerInfo): Mdns {
       name: self.name,
       type: self.type,
       proto: PROTO_VERSION,
+      fw: self.version,
     },
   });
 
@@ -54,7 +55,7 @@ export function startMdns(self: PeerInfo): Mdns {
   };
 }
 
-function toPeerInfo(service: Service): PeerInfo | null {
+export function toPeerInfo(service: Service): PeerInfo | null {
   const txt = (service.txt ?? {}) as Record<string, string>;
   if (!txt.id || !txt.type) return null;
   const address = firstIpv4(service.addresses) ?? service.host;
@@ -65,6 +66,7 @@ function toPeerInfo(service: Service): PeerInfo | null {
     host: service.host,
     address,
     port: service.port,
+    version: txt.fw ?? "",
   };
 }
 

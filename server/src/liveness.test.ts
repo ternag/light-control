@@ -5,11 +5,11 @@ import type { PeerInfo } from "./types.js";
 
 const self: PeerInfo = {
   id: "self-1", name: "server-1", type: "server",
-  host: "server-1.local", address: "192.168.0.10", port: 8080,
+  host: "server-1.local", address: "192.168.0.10", port: 8080, version: "v0.1.0",
 };
 const esp: PeerInfo = {
   id: "esp32-ab", name: "esp32-ab", type: "firmware",
-  host: "esp32-ab.local", address: "192.168.0.42", port: 80,
+  host: "esp32-ab.local", address: "192.168.0.42", port: 80, version: "v0.1.0",
 };
 
 const has = (roster: ReturnType<typeof createRoster>, id: string, now: number) =>

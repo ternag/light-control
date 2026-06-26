@@ -16,6 +16,7 @@ export interface PeerInfo {
   host: string;
   address: string;
   port: number;
+  version: string; // e.g. "v0.1.0", "abc123-dirty", or "unknown"
 }
 
 /** A roster row as returned by `GET /api/peers`. */

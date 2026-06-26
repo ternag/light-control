@@ -1,0 +1,20 @@
+name: firmware-ci
+on:
+  push:
+    paths: ["firmware/**", ".github/workflows/firmware-ci.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware-ci.yml"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - name: Provide placeholder secrets (real creds are git-ignored)
+        run: cp firmware/include/secrets.example.h firmware/include/secrets.h
+      - run: pio run -d firmware

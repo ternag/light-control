@@ -1,8 +1,10 @@
 import { usePeers } from "./usePeers";
-import type { RosterEntry } from "./types";
+import { useFirmwareLatest } from "./useFirmwareLatest";
+import type { FirmwareLatest, RosterEntry } from "./types";
 
 export function App() {
   const { peers, error, loaded } = usePeers();
+  const latestFirmware = useFirmwareLatest();
 
   return (
     <main>
@@ -17,19 +19,28 @@ export function App() {
 
       <ul className="roster">
         {peers.map((p) => (
-          <PeerRow key={p.id} peer={p} />
+          <PeerRow key={p.id} peer={p} latestFirmware={latestFirmware} />
         ))}
       </ul>
     </main>
   );
 }
 
-function PeerRow({ peer }: { peer: RosterEntry }) {
+function isUpdateAvailable(peer: RosterEntry, latest: FirmwareLatest | null): boolean {
+  if (peer.type !== "firmware" || !latest) return false;
+  if (!peer.version || peer.version === "unknown") return false;
+  return peer.version !== latest.version;
+}
+
+function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: FirmwareLatest | null }) {
+  const updateAvailable = isUpdateAvailable(peer, latestFirmware);
   return (
     <li className={`peer ${peer.self ? "is-self" : ""}`}>
       <span className={`badge badge-${peer.type}`}>{peer.type}</span>
       <span className="name">{peer.name}</span>
       {peer.self && <span className="you">you</span>}
+      <span className="version">{peer.version || "—"}</span>
+      {updateAvailable && <span className="update-tag">update available</span>}
       <span className="addr">
         {peer.address}:{peer.port}
       </span>
