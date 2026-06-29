@@ -129,6 +129,11 @@ static void connectWifi() {
       ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   Serial.printf("Connecting to WiFi \"%s\"...\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  // Cap TX power LOW (8.5 dBm; the default is ~19.5 dBm). These cheap C3 SuperMini
+  // clones have a weak regulator that browns out on the current spike when the
+  // radio transmits at full power, failing the auth handshake (reason 2). Backing
+  // the power off keeps the rail stable. Known board quirk — not a faulty board.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
