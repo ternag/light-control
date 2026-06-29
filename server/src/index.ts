@@ -17,7 +17,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const name = process.env.NODE_NAME ?? `server-${hostname()}`;
 const port = Number(process.env.PORT ?? 8080);
 // A peer drops off this long after it stops answering liveness probes.
-const ttlMs = Number(process.env.PEER_TTL_MS ?? 6_000);
+// Guard against an empty/invalid env value: Number("") is 0, and ?? only
+// catches null/undefined, so a 0 TTL would expire every peer immediately.
+const ttlMs = Number(process.env.PEER_TTL_MS) || 6_000;
 const repo = process.env.GH_REPO ?? "ternag/light-control";
 
 const self: PeerInfo = {
