@@ -117,6 +117,16 @@ static void scanNetworks() {
 
 static void connectWifi() {
   WiFi.mode(WIFI_STA);
+  // Log the disconnect reason code on every drop. Invaluable for telling apart
+  // a wrong password (202 AUTH_FAIL) from a missing/hidden AP (201 NO_AP_FOUND)
+  // from a flaky link or weak transmit path (2 AUTH_EXPIRE, the usual symptom of
+  // a board that hears the AP but can't complete the handshake).
+  WiFi.onEvent(
+      [](WiFiEvent_t, WiFiEventInfo_t info) {
+        Serial.printf("  [disconnect reason: %u]\n",
+                      info.wifi_sta_disconnected.reason);
+      },
+      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   Serial.printf("Connecting to WiFi \"%s\"...\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
