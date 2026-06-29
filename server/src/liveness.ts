@@ -1,3 +1,4 @@
+import { Socket } from "node:net";
 import type { PeerInfo } from "./types.js";
 import type { Roster } from "./roster.js";
 
@@ -22,20 +23,30 @@ export async function checkLiveness(
   );
 }
 
-/** Default probe: GET the peer's roster endpoint with a short timeout. */
-export async function httpProbe(peer: PeerInfo, timeoutMs = 1000): Promise<boolean> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(`http://${peer.address}:${peer.port}/api/peers`, {
-      signal: ac.signal,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
+/**
+ * Default probe: open a TCP connection to the peer's port and close it at once.
+ *
+ * We deliberately do NOT make an HTTP request here. A firmware node's tiny
+ * async web server can't service Node's HTTP client (undici keep-alive), and
+ * piling up half-open requests can exhaust its connection pool and crash it.
+ * "The port accepts a connection" is a sufficient and gentle liveness signal.
+ */
+export function tcpProbe(peer: PeerInfo, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.connect(peer.port, peer.address);
+  });
 }
 
 export interface LivenessOptions {
@@ -50,9 +61,11 @@ export function startLiveness(
   options: LivenessOptions = {},
 ): () => void {
   const intervalMs = options.intervalMs ?? 2000;
-  const timeoutMs = options.timeoutMs ?? 1000;
-  const probe: Probe = (peer) => httpProbe(peer, timeoutMs);
-  const tick = () => void checkLiveness(roster, getCandidates(), probe, Date.now());
+  const timeoutMs = options.timeoutMs ?? 1500;
+  const probe: Probe = (peer) => tcpProbe(peer, timeoutMs);
+  const tick = () => {
+    void checkLiveness(roster, getCandidates(), probe, Date.now());
+  };
   const timer = setInterval(tick, intervalMs);
   tick();
   return () => clearInterval(timer);
