@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 
 #include "secrets.h"
+#include "ota.h"
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "unknown"
@@ -226,11 +227,39 @@ void setup() {
   server.on("/api/peers", HTTP_GET, [](AsyncWebServerRequest *req) {
     req->send(200, "application/json", rosterJson());
   });
+
+  server.on(
+      "/api/update", HTTP_POST,
+      [](AsyncWebServerRequest *req) {
+        // Completion callback: the body handler already responded.
+        if (!req->_tempObject) req->send(400, "application/json", "{\"error\":\"empty body\"}");
+      },
+      nullptr,
+      [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
+        static String body;
+        if (index == 0) body = "";
+        body.concat(reinterpret_cast<const char *>(data), len);
+        if (index + len < total) return; // wait for the whole body
+        req->_tempObject = (void *)1; // mark handled
+        JsonDocument doc;
+        if (deserializeJson(doc, body)) { req->send(400, "application/json", "{\"error\":\"bad json\"}"); return; }
+        String url = doc["url"] | "";
+        String sigUrl = doc["sigUrl"] | "";
+        String version = doc["version"] | "";
+        if (url.isEmpty() || sigUrl.isEmpty()) { req->send(400, "application/json", "{\"error\":\"url/sigUrl required\"}"); return; }
+        if (!otaRequest(url, sigUrl, version)) { req->send(409, "application/json", "{\"error\":\"update already in progress\"}"); return; }
+        req->send(202, "application/json", "{\"status\":\"accepted\"}");
+      });
+
   server.begin();
   Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
 }
 
 void loop() {
+  if (otaPending()) {
+    otaRun(); // blocks; reboots on success
+    return;
+  }
   static uint32_t lastScan = 0;
   if (millis() - lastScan >= SCAN_INTERVAL_MS) {
     lastScan = millis();
