@@ -49,4 +49,12 @@ describe("selectLatestFirmwareRelease", () => {
   test("rejects a release that has no .sig", () => {
     expect(selectLatestFirmwareRelease([rel("fw-v0.2.0", ["firmware-fw-v0.2.0.bin"])])).toBeNull();
   });
+
+  test("falls back to older signed release when newest is unsigned", () => {
+    const out = selectLatestFirmwareRelease([
+      rel("fw-v0.2.0", ["firmware-fw-v0.2.0.bin"], { published_at: "2026-06-24T00:00:00Z" }),
+      rel("fw-v0.1.0", ["firmware-fw-v0.1.0.bin", "firmware-fw-v0.1.0.bin.sig"], { published_at: "2026-06-20T00:00:00Z" }),
+    ]);
+    expect(out?.version).toBe("v0.1.0");
+  });
 });
