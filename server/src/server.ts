@@ -10,6 +10,8 @@ export interface HttpOptions {
   staticDir?: string;
   /** Latest published firmware release, for GET /api/firmware/latest. */
   getLatestFirmware?: () => FirmwareRelease | null;
+  /** In-memory cache of the latest signed firmware, for LAN serving. */
+  firmwareCache?: import("./firmwareCache.js").FirmwareCache;
 }
 
 const MIME: Record<string, string> = {
@@ -45,6 +47,15 @@ async function handle(
 
   if (url.pathname === "/api/firmware/latest") {
     sendJson(res, 200, options.getLatestFirmware?.() ?? null);
+    return;
+  }
+
+  if (url.pathname === "/api/firmware/latest/bin" || url.pathname === "/api/firmware/latest/sig") {
+    const fw = options.firmwareCache?.get();
+    if (!fw) { sendJson(res, 404, { error: "no firmware cached" }); return; }
+    const body = url.pathname.endsWith("/sig") ? fw.sig : fw.bin;
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": body.length });
+    res.end(body);
     return;
   }
 

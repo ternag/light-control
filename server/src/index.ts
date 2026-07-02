@@ -8,6 +8,7 @@ import { startMdns } from "./mdns.js";
 import { startLiveness } from "./liveness.js";
 import { startHttp, type HttpOptions } from "./server.js";
 import { startReleaseWatcher } from "./release.js";
+import { createFirmwareCache } from "./firmwareCache.js";
 import { detectWebVersion } from "./version.js";
 import type { PeerInfo } from "./types.js";
 
@@ -37,10 +38,13 @@ const mdns = startMdns(self);
 // mDNS discovers candidates; HTTP probes decide who's actually alive in the roster.
 const stopLiveness = startLiveness(roster, mdns.getCandidates, { intervalMs: 2000, timeoutMs: 1000 });
 const releases = startReleaseWatcher(repo);
+const firmwareCache = createFirmwareCache(releases.getLatest);
+const cacheTimer = setInterval(() => void firmwareCache.refresh(), 30_000);
+void firmwareCache.refresh();
 
 // Serve the built PWA if it exists (../app/dist), else run API-only.
 const staticDir = resolve(here, "../../app/dist");
-const httpOptions: HttpOptions = { port, getLatestFirmware: releases.getLatest };
+const httpOptions: HttpOptions = { port, getLatestFirmware: releases.getLatest, firmwareCache };
 if (existsSync(staticDir)) httpOptions.staticDir = staticDir;
 const server = startHttp(roster, httpOptions);
 
@@ -56,6 +60,7 @@ function shutdown() {
   stopLiveness();
   mdns.stop();
   releases.stop();
+  clearInterval(cacheTimer);
   server.close();
   process.exit(0);
 }
