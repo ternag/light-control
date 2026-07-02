@@ -19,7 +19,31 @@ jobs:
       - run: pio run -d firmware
       - name: Stage binary
         run: cp firmware/.pio/build/esp32-c3/firmware.bin "firmware-${{ github.ref_name }}.bin"
+      - name: Sign binary (Ed25519 over SHA-256)
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$FW_SIGNING_KEY" > signing_key.pem
+          # Guard: the secret's public key must match the committed header.
+          derived=$(openssl pkey -in signing_key.pem -pubout -outform DER | tail -c 32 | xxd -p | tr -d '\n')
+          committed=$(grep -oE '0x[0-9a-fA-F]{2}' firmware/include/fw_public_key.h | sed 's/0x//' | tr -d '\n')
+          if [ "$derived" != "$committed" ]; then
+            echo "FW_SIGNING_KEY does not match firmware/include/fw_public_key.h"; exit 1
+          fi
+          # sig = Ed25519(privkey, SHA256(bin))
+          openssl dgst -sha256 -binary "firmware-${{ github.ref_name }}.bin" > fw.sha256
+          openssl pkeyutl -sign -inkey signing_key.pem -rawin -in fw.sha256 \
+            -out "firmware-${{ github.ref_name }}.bin.sig"
+          # self-verify against the public key derived from the signing key
+          openssl pkey -in signing_key.pem -pubout -out fw_pub.pem
+          openssl pkeyutl -verify -pubin -inkey fw_pub.pem -rawin -in fw.sha256 \
+            -sigfile "firmware-${{ github.ref_name }}.bin.sig"
+          test "$(wc -c < "firmware-${{ github.ref_name }}.bin.sig")" -eq 64
+          rm -f signing_key.pem fw_pub.pem fw.sha256
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: "firmware-${{ github.ref_name }}.bin"
+          files: |
+            firmware-${{ github.ref_name }}.bin
+            firmware-${{ github.ref_name }}.bin.sig
