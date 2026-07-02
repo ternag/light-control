@@ -14,24 +14,29 @@ export interface GhRelease {
 export interface FirmwareRelease {
   version: string; // normalized, "fw-" stripped
   binUrl: string;
+  sigUrl: string;
   publishedAt: string;
 }
 
-/** Newest non-draft `fw-*` release that ships a `.bin`, or null. */
+/** Newest non-draft `fw-*` release that ships a `.bin` and `.bin.sig`, or null. */
 export function selectLatestFirmwareRelease(releases: GhRelease[]): FirmwareRelease | null {
   const candidates = releases
     .filter((r) => !r.draft && r.tag_name.startsWith("fw-"))
     .filter((r) => r.assets.some((a) => a.name.endsWith(".bin")))
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
 
-  const latest = candidates[0];
-  if (!latest) return null;
-  const bin = latest.assets.find((a) => a.name.endsWith(".bin"))!;
-  return {
-    version: latest.tag_name.replace(/^fw-/, ""),
-    binUrl: bin.browser_download_url,
-    publishedAt: latest.published_at,
-  };
+  for (const latest of candidates) {
+    const bin = latest.assets.find((a) => a.name.endsWith(".bin"));
+    const sig = latest.assets.find((a) => a.name.endsWith(".bin.sig"));
+    if (!bin || !sig) continue; // an unsigned release is not installable
+    return {
+      version: latest.tag_name.replace(/^fw-/, ""),
+      binUrl: bin.browser_download_url,
+      sigUrl: sig.browser_download_url,
+      publishedAt: latest.published_at,
+    };
+  }
+  return null;
 }
 
 export interface ReleaseWatcher {
