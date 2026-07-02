@@ -6,6 +6,7 @@
 
 #include "secrets.h"
 #include "ota.h"
+#include <esp_ota_ops.h>
 
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "unknown"
@@ -45,6 +46,9 @@ struct Peer {
 static String g_id;   // this node's stable id (MAC-derived)
 static String g_name; // this node's friendly name
 static std::vector<Peer> g_peers;
+
+static bool g_pendingVerify = false;
+static uint32_t g_verifyDeadline = 0;
 
 static AsyncWebServer server(HTTP_PORT);
 
@@ -253,12 +257,31 @@ void setup() {
 
   server.begin();
   Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
+
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
+      state == ESP_OTA_IMG_PENDING_VERIFY) {
+    g_pendingVerify = true;
+    g_verifyDeadline = millis() + 30000; // 30s to prove healthy
+    Serial.println("OTA: running a pending image — will confirm health for 30s");
+  }
 }
 
 void loop() {
   if (otaPending()) {
     otaRun(); // blocks; reboots on success
     return;
+  }
+  if (g_pendingVerify && millis() > g_verifyDeadline) {
+    g_pendingVerify = false;
+    if (WiFi.status() == WL_CONNECTED) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      Serial.println("OTA: new image confirmed healthy — committed");
+    } else {
+      Serial.println("OTA: health check FAILED — rolling back");
+      esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
+    }
   }
   static uint32_t lastScan = 0;
   if (millis() - lastScan >= SCAN_INTERVAL_MS) {
