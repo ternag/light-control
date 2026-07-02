@@ -1,4 +1,5 @@
 .pio/
+**/.DS_Store
 
 # AI/design planning notes — kept locally, not tracked
 .planning/
