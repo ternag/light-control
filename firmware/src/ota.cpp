@@ -23,8 +23,9 @@ static bool fetchSig(const String &url, uint8_t out[64]) {
   if (!http.begin(url)) return false;
   int code = http.GET();
   bool ok = false;
-  if (code == HTTP_CODE_OK && http.getSize() == 64) {
-    ok = http.getStreamPtr()->readBytes(out, 64) == 64;
+  if (code == HTTP_CODE_OK) {
+    int n = http.getStreamPtr()->readBytes(out, 64);
+    ok = (n == 64);
   }
   http.end();
   return ok;
