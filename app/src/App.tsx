@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { usePeers } from "./usePeers";
 import { useFirmwareLatest } from "./useFirmwareLatest";
 import type { FirmwareLatest, RosterEntry } from "./types";
@@ -34,19 +35,37 @@ function isUpdateAvailable(peer: RosterEntry, latest: FirmwareLatest | null): bo
 
 function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: FirmwareLatest | null }) {
   const updateAvailable = isUpdateAvailable(peer, latestFirmware);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function onUpdate() {
+    if (!confirm(`Update ${peer.name} to ${latestFirmware?.version}? The node will reboot.`)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/peers/${encodeURIComponent(peer.id)}/update`, { method: "POST" });
+      if (res.status !== 202) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+    // On success we leave `busy` true; the node drops from the roster and returns
+    // on the new version, at which point `updateAvailable` becomes false.
+  }
+
   return (
     <li className={`peer ${peer.self ? "is-self" : ""}`}>
       <span className={`badge badge-${peer.type}`}>{peer.type}</span>
       <span className="name">{peer.name}</span>
       {peer.self && <span className="you">you</span>}
       <span className="version">{peer.version || "—"}</span>
-      {updateAvailable && <span className="update-tag">update available</span>}
-      <span className="addr">
-        {peer.address}:{peer.port}
-      </span>
-      <span className="seen" title={peer.lastSeen}>
-        {timeAgo(peer.lastSeen)}
-      </span>
+      {updateAvailable && !busy && (
+        <button className="update-btn" onClick={onUpdate}>update available →</button>
+      )}
+      {busy && <span className="update-tag">updating…</span>}
+      {err && <span className="error">{err}</span>}
+      <span className="addr">{peer.address}:{peer.port}</span>
+      <span className="seen" title={peer.lastSeen}>{timeAgo(peer.lastSeen)}</span>
     </li>
   );
 }
