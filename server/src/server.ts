@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import type { Roster } from "./roster.js";
 import type { FirmwareRelease } from "./release.js";
+import type { PeerInfo } from "./types.js";
 
 export interface HttpOptions {
   port: number;
@@ -12,6 +13,8 @@ export interface HttpOptions {
   getLatestFirmware?: () => FirmwareRelease | null;
   /** In-memory cache of the latest signed firmware, for LAN serving. */
   firmwareCache?: import("./firmwareCache.js").FirmwareCache;
+  /** The server's own identity, used to build LAN URLs for OTA updates. */
+  self: PeerInfo;
 }
 
 const MIME: Record<string, string> = {
@@ -56,6 +59,14 @@ async function handle(
     const body = url.pathname.endsWith("/sig") ? fw.sig : fw.bin;
     res.writeHead(200, { "content-type": "application/octet-stream", "content-length": body.length });
     res.end(body);
+    return;
+  }
+
+  const updateMatch = url.pathname.match(/^\/api\/peers\/([^/]+)\/update$/);
+  if (updateMatch && req.method === "POST") {
+    const { triggerUpdate } = await import("./updateTrigger.js");
+    const out = await triggerUpdate(roster, options.self, decodeURIComponent(updateMatch[1]));
+    sendJson(res, out.status, out.body);
     return;
   }
 

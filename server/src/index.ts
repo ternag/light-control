@@ -44,7 +44,7 @@ void firmwareCache.refresh();
 
 // Serve the built PWA if it exists (../app/dist), else run API-only.
 const staticDir = resolve(here, "../../app/dist");
-const httpOptions: HttpOptions = { port, getLatestFirmware: releases.getLatest, firmwareCache };
+const httpOptions: HttpOptions = { port, getLatestFirmware: releases.getLatest, firmwareCache, self };
 if (existsSync(staticDir)) httpOptions.staticDir = staticDir;
 const server = startHttp(roster, httpOptions);
 
