@@ -6,6 +6,7 @@ export async function triggerUpdate(
   roster: Roster,
   self: PeerInfo,
   id: string,
+  latestVersion: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ status: number; body: unknown }> {
   const peer = roster.list(Date.now()).find((p) => p.id === id && !p.self);
@@ -20,7 +21,7 @@ export async function triggerUpdate(
       body: JSON.stringify({
         url: `${base}/api/firmware/latest/bin`,
         sigUrl: `${base}/api/firmware/latest/sig`,
-        version: peer.version,
+        version: latestVersion ?? peer.version,
       }),
     });
     let body: unknown = null;
