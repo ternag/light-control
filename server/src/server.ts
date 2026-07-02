@@ -65,7 +65,8 @@ async function handle(
   const updateMatch = url.pathname.match(/^\/api\/peers\/([^/]+)\/update$/);
   if (updateMatch && req.method === "POST") {
     const { triggerUpdate } = await import("./updateTrigger.js");
-    const out = await triggerUpdate(roster, options.self, decodeURIComponent(updateMatch[1]));
+    const latestVersion = options.getLatestFirmware?.()?.version ?? null;
+    const out = await triggerUpdate(roster, options.self, decodeURIComponent(updateMatch[1]), latestVersion);
     sendJson(res, out.status, out.body);
     return;
   }
