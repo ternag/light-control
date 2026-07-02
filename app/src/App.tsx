@@ -63,7 +63,7 @@ function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: 
         <button className="update-btn" onClick={onUpdate}>update available →</button>
       )}
       {busy && <span className="update-tag">updating…</span>}
-      {err && <span className="error">{err}</span>}
+      {updateAvailable && err && <span className="error">{err}</span>}
       <span className="addr">{peer.address}:{peer.port}</span>
       <span className="seen" title={peer.lastSeen}>{timeAgo(peer.lastSeen)}</span>
     </li>
