@@ -9,20 +9,26 @@ PCA9685 (16-channel PWM over I²C) and talk two-way over WiFi to a central
 computer. Each node must keep running its automations (light patterns, input
 responses) autonomously when offline. Multiple nodes, one central computer.
 
-Current state is a **first-light smoke test only** (`firmware/src/main.cpp`):
-blink the onboard LED + print a serial heartbeat to prove the toolchain works.
-The board has not arrived yet, so most behavior is unverified on hardware.
+Current state: the **discovery + OTA walking skeleton** works end to end.
+Firmware nodes join WiFi, announce/browse `_lightctrl._tcp` over mDNS, keep a
+peer roster, serve a small HTTP API, and accept signed OTA updates
+(Ed25519-verified, confirm-healthy-or-rollback). The server discovers peers,
+probes liveness, watches GitHub releases (`fw-v*` tags) for signed firmware,
+caches the binary for LAN serving, and triggers node updates. The PWA shows the
+roster with an update button. No LED driving yet — that's next.
 
 ## Monorepo layout
 
-One sub-project per component. Only `firmware/` exists today; `server/` (central
-computer software) is planned. `.planning/` holds design notes — read it for
-intent that isn't yet in code. Artifacts for AI sessions go in `~/Claude/`, never
-in this repo.
+One sub-project per component: `firmware/` (ESP32-C3, PlatformIO/Arduino),
+`server/` (central computer, Node/TypeScript, run via `./server.sh`), and
+`app/` (PWA, React + Vite, served by the server from `app/dist`). `.planning/`
+holds design notes — read it for intent that isn't yet in code. Artifacts for
+AI sessions go in `~/Claude/`, never in this repo.
 
 ## Build / flash / monitor
 
-Run from `firmware/` or pass `-d firmware`.
+`./flash.sh` wraps the common firmware flows (build / upload / monitor / diag);
+or run `pio` from `firmware/` (or pass `-d firmware`).
 
 | Command | What it does |
 |---|---|
@@ -32,8 +38,8 @@ Run from `firmware/` or pass `-d firmware`.
 | `pio device list` | Find the serial port (native USB enumerates as `/dev/cu.usbmodem*`) |
 | `pio run -t clean` | Clean build artifacts |
 
-No test framework is set up yet. Until a board is available, `pio run`
-(compile-only) is the verification step.
+Server tests: `cd server && npx vitest run`. Firmware has no on-target tests;
+`pio run` (compile-only) is the pre-hardware verification step.
 
 If upload won't start: hold **BOOT**, tap **RESET**, release **BOOT** to force
 the bootloader, then upload again.
