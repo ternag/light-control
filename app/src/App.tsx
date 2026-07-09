@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePeers } from "./usePeers";
 import { useFirmwareLatest } from "./useFirmwareLatest";
 import type { FirmwareLatest, RosterEntry } from "./types";
@@ -33,10 +33,27 @@ function isUpdateAvailable(peer: RosterEntry, latest: FirmwareLatest | null): bo
   return peer.version !== latest.version;
 }
 
+// How long a triggered update may run before we assume it failed node-side.
+// A normal OTA (download + flash + reboot) finishes well within this.
+const UPDATE_TIMEOUT_MS = 90_000;
+
 function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: FirmwareLatest | null }) {
   const updateAvailable = isUpdateAvailable(peer, latestFirmware);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // On success the node reboots off the roster (unmounting this row) and comes
+  // back on the new version. But a node-side failure after the 202 is silent —
+  // the node just stays on the old version — so give up after a timeout to
+  // bring the update button back instead of showing "updating…" forever.
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setTimeout(() => {
+      setBusy(false);
+      setErr("update did not complete — node still on the old version");
+    }, UPDATE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [busy]);
 
   async function onUpdate() {
     if (!confirm(`Update ${peer.name} to ${latestFirmware?.version}? The node will reboot.`)) return;
@@ -49,8 +66,6 @@ function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: 
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
-    // On success we leave `busy` true; the node drops from the roster and returns
-    // on the new version, at which point `updateAvailable` becomes false.
   }
 
   return (
@@ -62,7 +77,7 @@ function PeerRow({ peer, latestFirmware }: { peer: RosterEntry; latestFirmware: 
       {updateAvailable && !busy && (
         <button className="update-btn" onClick={onUpdate}>update available →</button>
       )}
-      {busy && <span className="update-tag">updating…</span>}
+      {updateAvailable && busy && <span className="update-tag">updating…</span>}
       {updateAvailable && err && <span className="error">{err}</span>}
       <span className="addr">{peer.address}:{peer.port}</span>
       <span className="seen" title={peer.lastSeen}>{timeAgo(peer.lastSeen)}</span>
