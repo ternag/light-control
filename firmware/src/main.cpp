@@ -67,6 +67,28 @@ static void setLed(bool on) {
   digitalWrite(LED_PIN, (on ^ LED_ACTIVE_LOW) ? HIGH : LOW);
 }
 
+// Morse SOS (··· ——— ···) for the auth-failed state — a wrong compiled-in
+// password can't self-heal, so the node literally signals "send help." One
+// segment = {LED on?, ms}; dot = 200ms, dash = 600ms, gaps between. The last
+// off-segment is the 3s pause before the call repeats.
+struct LedSeg { bool on; uint16_t ms; };
+static const LedSeg SOS_PATTERN[] = {
+    {true, 200}, {false, 200}, {true, 200}, {false, 200}, {true, 200}, {false, 600}, // S
+    {true, 600}, {false, 200}, {true, 600}, {false, 200}, {true, 600}, {false, 600}, // O
+    {true, 200}, {false, 200}, {true, 200}, {false, 200}, {true, 200}, {false, 3000}, // S + pause
+};
+
+static bool sosLevel(uint32_t t) {
+  uint32_t total = 0;
+  for (const LedSeg &s : SOS_PATTERN) total += s.ms;
+  uint32_t x = t % total;
+  for (const LedSeg &s : SOS_PATTERN) {
+    if (x < s.ms) return s.on;
+    x -= s.ms;
+  }
+  return false;
+}
+
 // Derives LED behavior from WifiConnector's state every loop() tick — see
 // .planning/2026-07-09-wifi-status-led-design.md for the state table.
 static void updateLed() {
@@ -81,9 +103,17 @@ static void updateLed() {
     }
     return;
   }
-  bool exhausted = g_wifi.state() == WifiConnector::State::kConnectingExhausted;
-  uint32_t period = exhausted ? LED_BLINK_PERIOD_EXHAUSTED_MS : LED_BLINK_PERIOD_MS;
-  setLed((millis() % period) < (period / 2));
+  switch (g_wifi.state()) {
+    case WifiConnector::State::kAuthFailed:
+      setLed(sosLevel(millis()));  // ··· ——— ··· — needs a human
+      return;
+    case WifiConnector::State::kConnectingExhausted:
+      setLed((millis() % LED_BLINK_PERIOD_EXHAUSTED_MS) < (LED_BLINK_PERIOD_EXHAUSTED_MS / 2));
+      return;
+    default:  // kConnecting (incl. waiting for an absent AP)
+      setLed((millis() % LED_BLINK_PERIOD_MS) < (LED_BLINK_PERIOD_MS / 2));
+      return;
+  }
 }
 
 // Serialize self + discovered peers into the roster JSON contract.
@@ -261,12 +291,12 @@ void loop() {
       server.begin();
       g_networkReady = true;
       Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
-    } else {
-      // Reconnected — the IP may have changed, so re-announce. The HTTP
-      // server itself doesn't need restarting; it isn't bound to an IP.
-      MDNS.end();
-      startMdns();
     }
+    // On reconnect we deliberately do NOTHING to mDNS. The ESP-IDF mdns
+    // responder registers its own WiFi/IP event handlers (see mdns_init) and
+    // re-announces on the new IP automatically. Tearing it down and rebuilding
+    // it here (MDNS.end()/begin()) left the service unregistered after a
+    // reconnect, so the node vanished from the server's peer list.
   }
   updateLed();
 

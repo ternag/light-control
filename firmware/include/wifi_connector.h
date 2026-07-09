@@ -20,7 +20,10 @@
 // known AP; see .planning/2026-07-09-wifi-status-led-design.md.
 class WifiConnector {
  public:
-  enum class State { kConnecting, kConnectingExhausted, kConnected };
+  // kAuthFailed is latched once we see an AUTH_FAIL against a present AP: a
+  // wrong compiled-in password can't self-heal, so it stays until a genuine
+  // connect. Callers surface it distinctly (an SOS blink — "needs a human").
+  enum class State { kConnecting, kConnectingExhausted, kConnected, kAuthFailed };
 
   WifiConnector() = default;
 
@@ -41,10 +44,28 @@ class WifiConnector {
   static String currentPowerLabel();
 
  private:
-  void startRungAttempt(size_t rung);
-  void advanceAfterFailure();
+  // A failed rung means one of several things, and only one of them is fixed
+  // by lowering TX power. We descend the ladder ONLY on positive evidence of
+  // radio brownout — the AP is audibly present (in the scan) and reasonably
+  // strong, yet association still fails for a non-credential reason. Every
+  // other failure holds the current rung instead of walking down and
+  // corrupting the saved last-known-good:
+  //   - AP not in the scan  → it's off / out of range / 5GHz-only. TX power is
+  //     irrelevant; poll (kWaiting) until it reappears, then retry this rung.
+  //   - AP present, AUTH_FAIL → wrong password. A credential problem, not a
+  //     power one; retry this rung (it will keep failing, harmlessly).
+  //   - AP present but faint (RSSI below the floor) → the link is range-limited;
+  //     descending TX would only weaken our transmit further. Hold this rung.
+  // See .planning/2026-07-09-wifi-status-led-design.md.
+  enum class Phase { kAttempting, kScanning, kWaiting };
+
+  void startRungAttempt(size_t rung);  // (re)associate at rung; enters kAttempting
+  void onConnected();
+  void onScanComplete();  // decide: descend, retry-same, or wait
+  void descendLadder();   // brownout evidence → step down one rung (or hold at floor)
+  void enterWaiting();    // AP absent → schedule the next presence scan
   void beginScan();
-  bool pollScan();  // returns true once the scan has finished (results printed)
+  bool pollScan();  // true once the scan has finished; sets scanSawSsid_/scanRssi_
   int loadStartRung();
   void saveGoodRung(int rung);
 
@@ -52,13 +73,20 @@ class WifiConnector {
   const char *password_ = nullptr;
   bool connected_ = false;
   bool ladderExhausted_ = false;
-  bool waitingForScan_ = false;
+  bool authFailed_ = false;  // latched on AUTH_FAIL; cleared only on a real connect
+  Phase phase_ = Phase::kAttempting;
+  bool scanToDiagnose_ = false;  // scan follows a failed attempt (may descend) vs. polling for an absent AP
+  bool scanSawSsid_ = false;
+  int32_t scanRssi_ = -127;
   size_t rung_ = 0;
   uint32_t rungAttemptStart_ = 0;
+  uint32_t nextScanAt_ = 0;
 
   static const wifi_power_t kLadder[10];  // exactly 10 rungs (19.5..-1 dBm) — the
                                            // bound itself is the compile-time guard;
                                            // wifi_connector.cpp's initializer must match it.
   static const size_t kLadderSize;
   static const uint32_t kPerLevelTimeoutMs = 7000;
+  static const uint32_t kApPollIntervalMs = 3000;   // re-scan cadence while waiting for an absent AP
+  static const int32_t kDescendRssiFloorDbm = -80;  // only descend if the AP is at least this strong
 };
