@@ -41,6 +41,14 @@ static const uint32_t LED_GRACE_MS = 20000;              // solid-on window afte
 static const uint32_t LED_BLINK_PERIOD_MS = 500;          // connecting
 static const uint32_t LED_BLINK_PERIOD_EXHAUSTED_MS = 250; // ladder exhausted, holding at floor
 
+// BOOT button — a runtime long-press forces a TX-power reprobe from full power.
+// GPIO9 is the standard ESP32-C3 BOOT pin (also the flash-mode strap, but that
+// only matters at reset; a runtime read is safe). Verify on hardware like the
+// LED pin. See .planning/2026-07-09-tx-power-self-optimize-design.md.
+static const uint8_t BOOT_PIN = 9;
+static const uint32_t BUTTON_HOLD_MS = 3000;        // hold this long to trigger a reprobe
+static const uint32_t BUTTON_BOOT_GRACE_MS = 3000;  // ignore the button this long after boot
+
 struct Peer {
   String id;
   String name;
@@ -65,6 +73,27 @@ static uint32_t g_ledGraceDeadline = 0;
 
 static void setLed(bool on) {
   digitalWrite(LED_PIN, (on ^ LED_ACTIVE_LOW) ? HIGH : LOW);
+}
+
+// True exactly once per press, when BOOT has been held for BUTTON_HOLD_MS.
+// Ignored during the post-boot grace so it can't be confused with a flash-mode
+// strap at reset. Re-arms only after the button is released.
+static bool reprobeButtonLongPressed() {
+  if (millis() < BUTTON_BOOT_GRACE_MS) return false;
+  static uint32_t pressStart = 0;
+  static bool armed = true;
+  bool down = digitalRead(BOOT_PIN) == LOW;  // INPUT_PULLUP: pressed = LOW
+  if (!down) {
+    pressStart = 0;
+    armed = true;
+    return false;
+  }
+  if (pressStart == 0) pressStart = millis();
+  if (armed && millis() - pressStart >= BUTTON_HOLD_MS) {
+    armed = false;  // fire once; wait for release before it can fire again
+    return true;
+  }
+  return false;
 }
 
 // Morse SOS (··· ——— ···) for the auth-failed state — a wrong compiled-in
@@ -207,6 +236,7 @@ static void printRoster() {
 void setup() {
   Serial.begin(115200);
   pinMode(LED_PIN, OUTPUT);
+  pinMode(BOOT_PIN, INPUT_PULLUP);
   setLed(false);
   delay(500); // let the USB-CDC port enumerate on the host
   Serial.println("\nlight-control firmware: boot OK");
@@ -278,6 +308,8 @@ void loop() {
       esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
     }
   }
+
+  if (reprobeButtonLongPressed()) g_wifi.forceReprobe();
 
   bool wasConnected = g_wifi.isConnected();
   g_wifi.update();
