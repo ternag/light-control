@@ -4,6 +4,8 @@ import { extname, join, normalize } from "node:path";
 import type { Roster } from "./roster.js";
 import type { FirmwareRelease } from "./release.js";
 import type { PeerInfo } from "./types.js";
+import { FIRMWARE_BIN_PATH, FIRMWARE_SIG_PATH } from "./firmwareCache.js";
+import { triggerUpdate } from "./updateTrigger.js";
 
 export interface HttpOptions {
   port: number;
@@ -29,7 +31,11 @@ const MIME: Record<string, string> = {
 
 export function startHttp(roster: Roster, options: HttpOptions) {
   const server = createServer((req, res) => {
-    void handle(req, res, roster, options);
+    // Catch anything handle() throws (e.g. malformed percent-encoding in a
+    // path) — an unhandled rejection would take down the whole process.
+    handle(req, res, roster, options).catch(() => {
+      if (!res.headersSent) sendJson(res, 500, { error: "internal error" });
+    });
   });
   server.listen(options.port);
   return server;
@@ -53,10 +59,10 @@ async function handle(
     return;
   }
 
-  if (url.pathname === "/api/firmware/latest/bin" || url.pathname === "/api/firmware/latest/sig") {
+  if (url.pathname === FIRMWARE_BIN_PATH || url.pathname === FIRMWARE_SIG_PATH) {
     const fw = options.firmwareCache?.get();
     if (!fw) { sendJson(res, 404, { error: "no firmware cached" }); return; }
-    const body = url.pathname.endsWith("/sig") ? fw.sig : fw.bin;
+    const body = url.pathname === FIRMWARE_SIG_PATH ? fw.sig : fw.bin;
     res.writeHead(200, { "content-type": "application/octet-stream", "content-length": body.length });
     res.end(body);
     return;
@@ -64,9 +70,13 @@ async function handle(
 
   const updateMatch = url.pathname.match(/^\/api\/peers\/([^/]+)\/update$/);
   if (updateMatch && req.method === "POST") {
-    const { triggerUpdate } = await import("./updateTrigger.js");
-    const latestVersion = options.getLatestFirmware?.()?.version ?? null;
-    const out = await triggerUpdate(roster, options.self, decodeURIComponent(updateMatch[1]), latestVersion);
+    // Only trigger when the image is actually cached, and label the update with
+    // the CACHED version — the release watcher may already know about a newer
+    // release whose binary hasn't been downloaded yet, and the node installs
+    // whatever /api/firmware/latest/bin serves.
+    const fw = options.firmwareCache?.get();
+    if (!fw) { sendJson(res, 503, { error: "firmware not cached yet — try again shortly" }); return; }
+    const out = await triggerUpdate(roster, options.self, decodeURIComponent(updateMatch[1]), fw.version);
     sendJson(res, out.status, out.body);
     return;
   }

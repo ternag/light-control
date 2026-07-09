@@ -22,7 +22,6 @@ export interface FirmwareRelease {
 export function selectLatestFirmwareRelease(releases: GhRelease[]): FirmwareRelease | null {
   const candidates = releases
     .filter((r) => !r.draft && r.tag_name.startsWith("fw-"))
-    .filter((r) => r.assets.some((a) => a.name.endsWith(".bin")))
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
 
   for (const latest of candidates) {

@@ -20,6 +20,6 @@ test("posts the LAN image URLs to the target board", async () => {
 
 test("404 for an unknown or non-firmware peer", async () => {
   const roster = createRoster(self);
-  const r = await triggerUpdate(roster, self, "nope", null, (async () => ({})) as unknown as typeof fetch);
+  const r = await triggerUpdate(roster, self, "nope", "v0.2.0", (async () => ({})) as unknown as typeof fetch);
   expect(r.status).toBe(404);
 });

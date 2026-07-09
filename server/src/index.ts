@@ -28,7 +28,9 @@ const self: PeerInfo = {
   name,
   type: "server",
   host: hostname().endsWith(".local") ? hostname() : `${hostname()}.local`,
-  address: primaryIpv4(),
+  // Must be reachable from the ESP32 nodes: OTA download URLs are built from it.
+  // Override with ADVERTISE_IP when auto-detection picks the wrong interface.
+  address: process.env.ADVERTISE_IP || primaryIpv4(),
   port,
   version: detectWebVersion(),
 };
@@ -68,9 +70,17 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 function primaryIpv4(): string {
-  for (const iface of Object.values(networkInterfaces())) {
-    for (const info of iface ?? []) {
-      if (info.family === "IPv4" && !info.internal) return info.address;
+  // Prefer real LAN interfaces (en*/eth*/wlan*) over VPN/container ones
+  // (utun*, docker*, …) — interface enumeration order is arbitrary, and nodes
+  // can't reach a VPN or bridge address.
+  const interfaces = Object.entries(networkInterfaces());
+  const isLanName = (name: string) => /^(en|eth|wlan)/.test(name);
+  for (const lanPass of [true, false]) {
+    for (const [ifaceName, infos] of interfaces) {
+      if (isLanName(ifaceName) !== lanPass) continue;
+      for (const info of infos ?? []) {
+        if (info.family === "IPv4" && !info.internal) return info.address;
+      }
     }
   }
   return "127.0.0.1";
