@@ -6,6 +6,7 @@
 
 #include "secrets.h"
 #include "ota.h"
+#include "wifi_connector.h"
 #include <esp_ota_ops.h>
 
 #ifndef FIRMWARE_VERSION
@@ -15,7 +16,7 @@
 // ---------------------------------------------------------------------------
 // light-control firmware node — v1 "discovery" walking skeleton.
 //
-//   1. Connects to WiFi.
+//   1. Connects to WiFi (adaptive TX power — see wifi_connector.h).
 //   2. Announces itself on mDNS as a `_lightctrl._tcp` peer (TXT: id/name/
 //      type/proto) — the shared discovery contract (proto 1).
 //   3. Browses for other peers and keeps a roster in RAM.
@@ -56,6 +57,20 @@ static void setLed(bool on) {
   digitalWrite(LED_PIN, (on ^ LED_ACTIVE_LOW) ? HIGH : LOW);
 }
 
+// Blinks the LED while WifiConnector waits on a connection attempt. Also
+// where the OTA health-check rollback lives: WifiConnector::connect() blocks
+// until connected, so an unverified image whose WiFi is broken must roll
+// back from here — loop() would never run otherwise.
+static void wifiTick() {
+  if (g_pendingVerify && millis() > g_verifyDeadline) {
+    Serial.println("OTA: health check FAILED (no WiFi) — rolling back");
+    esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
+  }
+  static bool on = false;
+  on = !on;
+  setLed(on);
+}
+
 // Serialize self + discovered peers into the roster JSON contract.
 static String rosterJson() {
   JsonDocument doc;
@@ -85,86 +100,6 @@ static String rosterJson() {
   String out;
   serializeJson(doc, out);
   return out;
-}
-
-static const char *wifiStatusName(wl_status_t s) {
-  switch (s) {
-    case WL_NO_SSID_AVAIL: return "NO_SSID_AVAIL (network not found — wrong SSID, out of range, or 5GHz-only)";
-    case WL_CONNECT_FAILED: return "CONNECT_FAILED (auth rejected — wrong password?)";
-    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
-    case WL_DISCONNECTED: return "DISCONNECTED (still trying)";
-    case WL_IDLE_STATUS: return "IDLE";
-    case WL_CONNECTED: return "CONNECTED";
-    default: return "UNKNOWN";
-  }
-}
-
-// Diagnostic, only run when a connection attempt stalls: list the 2.4GHz
-// networks the C3 can see (including hidden ones). Helps tell a missing/hidden
-// SSID apart from a wrong password. Note: this gateway must broadcast a plain
-// 2.4GHz SSID — band-steered single-SSID networks hide the 2.4 radio and won't
-// onboard the C3 (see project notes).
-static void scanNetworks() {
-  Serial.println("Scanning for 2.4GHz networks (including hidden)...");
-  int n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
-  if (n <= 0) {
-    Serial.println("  (none found)");
-    return;
-  }
-  for (int i = 0; i < n; i++) {
-    String ssid = WiFi.SSID(i);
-    bool hidden = ssid.length() == 0;
-    Serial.printf("  %s%-24s ch%-3d %4ddBm\n", ssid == WIFI_SSID ? "-> " : "   ",
-                  hidden ? "<hidden>" : ssid.c_str(), WiFi.channel(i), WiFi.RSSI(i));
-  }
-  WiFi.scanDelete();
-}
-
-static void connectWifi() {
-  WiFi.mode(WIFI_STA);
-  // Log the disconnect reason code on every drop. Invaluable for telling apart
-  // a wrong password (202 AUTH_FAIL) from a missing/hidden AP (201 NO_AP_FOUND)
-  // from a flaky link or weak transmit path (2 AUTH_EXPIRE, the usual symptom of
-  // a board that hears the AP but can't complete the handshake).
-  WiFi.onEvent(
-      [](WiFiEvent_t, WiFiEventInfo_t info) {
-        Serial.printf("  [disconnect reason: %u]\n",
-                      info.wifi_sta_disconnected.reason);
-      },
-      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-  Serial.printf("Connecting to WiFi \"%s\"...\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  // Cap TX power LOW (8.5 dBm; the default is ~19.5 dBm). These cheap C3 SuperMini
-  // clones have a weak regulator that browns out on the current spike when the
-  // radio transmits at full power, failing the auth handshake (reason 2). Backing
-  // the power off keeps the rail stable. Known board quirk — not a faulty board.
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
-
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    // This loop never exits until connected, so an unverified OTA image whose
-    // WiFi is broken must roll back from HERE — loop() would never run.
-    if (g_pendingVerify && millis() > g_verifyDeadline) {
-      Serial.println("OTA: health check FAILED (no WiFi) — rolling back");
-      esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
-    }
-    setLed(true);
-    delay(250);
-    setLed(false);
-    delay(250);
-    if (millis() - start > 15000) {
-      // Stuck: report the status, scan to diagnose, then start the attempt over.
-      Serial.printf("  still not connected (%s) — re-scanning and retrying.\n",
-                    wifiStatusName(WiFi.status()));
-      scanNetworks();
-      WiFi.disconnect(true);
-      delay(200);
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-      start = millis();
-    }
-  }
-  setLed(true); // solid = connected
-  Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
 }
 
 static void startMdns() {
@@ -231,9 +166,10 @@ void setup() {
   Serial.println("\nlight-control firmware: boot OK");
   Serial.printf("firmware version: %s\n", FIRMWARE_VERSION);
 
-  // Arm the OTA health check BEFORE connecting: connectWifi() blocks until
-  // connected, so the "new image never gets WiFi" failure must be caught inside
-  // its retry loop, against a deadline that starts at boot.
+  // Arm the OTA health check BEFORE connecting: WifiConnector::connect() blocks
+  // until connected, so the "new image never gets WiFi" failure must be caught
+  // via wifiTick() (invoked during that wait), against a deadline that starts
+  // at boot.
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
   if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
@@ -243,7 +179,9 @@ void setup() {
     Serial.println("OTA: running a pending image — will confirm health for 30s");
   }
 
-  connectWifi();
+  WifiConnector wifi(wifiTick);
+  wifi.connect(WIFI_SSID, WIFI_PASSWORD);
+  setLed(true); // solid = connected
   startMdns();
 
   server.on("/api/peers", HTTP_GET, [](AsyncWebServerRequest *req) {
