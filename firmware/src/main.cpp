@@ -150,8 +150,9 @@ static void scanPeers() {
 
 static void printRoster() {
   Serial.printf("--- roster: %u peer(s) + self ---\n", (unsigned)g_peers.size());
-  Serial.printf("  * %-14s %-8s %s:%u (self)\n", g_name.c_str(), "firmware",
-                WiFi.localIP().toString().c_str(), HTTP_PORT);
+  Serial.printf("  * %-14s %-8s %s:%u (self) [TX %s]\n", g_name.c_str(), "firmware",
+                WiFi.localIP().toString().c_str(), HTTP_PORT,
+                WifiConnector::currentPowerLabel().c_str());
   for (const Peer &p : g_peers) {
     Serial.printf("    %-14s %-8s %s:%u\n", p.name.c_str(), p.type.c_str(),
                   p.address.c_str(), p.port);

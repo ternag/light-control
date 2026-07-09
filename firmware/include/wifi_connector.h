@@ -20,6 +20,12 @@ class WifiConnector {
   // Blocks until connected. Logs progress and diagnostics over Serial.
   void connect(const char *ssid, const char *password);
 
+  // Human-readable label for the TX power the radio is using right now
+  // (queries the live hardware value, not Preferences), e.g. "rung 3/10".
+  // Lets callers report the in-use ladder rung continuously (e.g. in a
+  // periodic status print) rather than only in the one-shot connect() log.
+  static String currentPowerLabel();
+
  private:
   bool tryConnectAtPower(const char *ssid, const char *password,
                           wifi_power_t power, uint32_t timeoutMs);

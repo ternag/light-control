@@ -79,6 +79,14 @@ if not m:
     m = re.search(r"\*\s+esp32-\S+\s+\w+\s+([0-9.]+):", blob)  # roster self line
 if m:
     ip = m.group(1)
+txpower = None
+tx_hits = re.findall(r"\[TX ([^\]]+)\]", blob)  # self roster line, printed every cycle
+if tx_hits:
+    txpower = tx_hits[-1]  # most recent
+else:
+    m = re.search(r"WiFi connected:.*\(TX power (rung \d+/\d+|floor)\)", blob)
+    if m:
+        txpower = m.group(1)
 node = None
 mid = re.search(r"id (esp32-\w+)", blob) or re.search(r"\*\s+(esp32-\w+)\b", blob)
 if mid:
@@ -89,7 +97,8 @@ no_aps = "(no networks found" in blob or "(none found)" in blob
 print("-" * 60)
 tag = f" [{node}]" if node else ""
 if ip:
-    print(f"VERDICT: CONNECTED{tag} — IP {ip}")
+    pw = f" — TX power {txpower}" if txpower else ""
+    print(f"VERDICT: CONNECTED{tag} — IP {ip}{pw}")
 elif reasons:
     extra = "; scan saw no APs" if no_aps else ""
     print(f"VERDICT: NOT CONNECTED{tag} — disconnect reasons seen: {', '.join(reasons)}{extra}")

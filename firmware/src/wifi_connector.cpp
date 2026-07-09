@@ -21,6 +21,19 @@ const char *wifiStatusName(wl_status_t s) {
 
 }  // namespace
 
+/*
+1/10 = 19.5 dBm  (full power)
+2/10 = 17 dBm
+3/10 = 15 dBm
+4/10 = 13 dBm
+5/10 = 11 dBm
+6/10 = 8.5 dBm
+7/10 = 7 dBm
+8/10 = 5 dBm
+9/10 = 2 dBm
+10/10 = -1 dBm   (floor)
+*/
+
 const wifi_power_t WifiConnector::kLadder[] = {
     WIFI_POWER_19_5dBm, WIFI_POWER_17dBm,     WIFI_POWER_15dBm,
     WIFI_POWER_13dBm,   WIFI_POWER_11dBm,     WIFI_POWER_8_5dBm,
@@ -76,6 +89,20 @@ void WifiConnector::connect(const char *ssid, const char *password) {
   saveGoodRung((int)floor);
   Serial.printf("WiFi connected: %s (TX power floor)\n",
                 WiFi.localIP().toString().c_str());
+}
+
+String WifiConnector::currentPowerLabel() {
+  wifi_power_t current = WiFi.getTxPower();
+  for (size_t i = 0; i < kLadderSize; i++) {
+    if (kLadder[i] == current) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "rung %u/%u", (unsigned)i + 1, (unsigned)kLadderSize);
+      return String(buf);
+    }
+  }
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%.1f dBm", current / 4.0);
+  return String(buf);
 }
 
 bool WifiConnector::tryConnectAtPower(const char *ssid, const char *password,
