@@ -1,11 +1,6 @@
 #include "wifi_connector.h"
 
-#include <Preferences.h>
-
 namespace {
-
-const char *kPrefsNamespace = "wifi";
-const char *kPrefsKey = "txpower";
 
 // Reason code from the most recent STA disconnect, written on the WiFi task by
 // the event handler and read by update() when a rung times out — lets us tell a
@@ -75,39 +70,37 @@ void WifiConnector::begin(const char *ssid, const char *password) {
       },
       ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
+  // Always start cold connect at full power and descend (see the class comment):
+  // the ladder only goes down, so a lower start could strand a moved-away board.
   Serial.printf("Connecting to WiFi \"%s\"...\n", ssid_);
-  int loaded = loadStartRung();
-  size_t startRung = loaded >= 0 ? (size_t)loaded : 0;
-  if (loaded >= 0) {
-    Serial.printf("  starting at last-known-good TX power (rung %u/%u)\n",
-                  (unsigned)startRung + 1, (unsigned)kLadderSize);
-  }
-
   connected_ = false;
   ladderExhausted_ = false;
   authFailed_ = false;
-  startRungAttempt(startRung);
+  maxIndex_ = kLadderSize - 1;
+  verifyingDown_ = false;
+  startRungAttempt(0);
 }
 
 void WifiConnector::update() {
   if (connected_) {
     if (WiFi.status() != WL_CONNECTED) {
-      // A drop during a probation bump means the higher power browned out —
-      // remember it as this session's ceiling so we don't climb back into it.
-      if (probing_) {
-        minProbeIndex_ = probeTarget_ + 1;
-        probing_ = false;
-        Serial.printf("  upward probe to rung %u/%u browned out — ceiling set; falling back.\n",
-                      (unsigned)probeTarget_ + 1, (unsigned)kLadderSize);
+      // A drop while verifying a down-step means that rung was too low for the
+      // (unobservable) uplink — record it as this session's power floor so we
+      // never go that low again, then reconnect.
+      if (verifyingDown_) {
+        maxIndex_ = downTarget_ - 1;
+        verifyingDown_ = false;
+        Serial.printf("  rung %u/%u dropped the link — power floor set at rung %u/%u.\n",
+                      (unsigned)downTarget_ + 1, (unsigned)kLadderSize,
+                      (unsigned)maxIndex_ + 1, (unsigned)kLadderSize);
       }
       Serial.println("WiFi connection lost — reconnecting.");
       connected_ = false;
       ladderExhausted_ = false;
-      int loaded = loadStartRung();
-      startRungAttempt(loaded >= 0 ? (size_t)loaded : 0);
+      startRungAttempt(0);  // always re-cold-connect from full power and descend
       return;
     }
-    maybeAutoClimb();
+    optimizePower();
     return;
   }
 
@@ -140,11 +133,10 @@ void WifiConnector::update() {
 }
 
 void WifiConnector::onConnected() {
-  saveGoodRung((int)rung_);
   connected_ = true;
   authFailed_ = false;  // a successful connect clears the "needs a human" latch
-  probing_ = false;
-  connectedSince_ = millis();  // start the stable-for-6h clock for the auto-climb
+  verifyingDown_ = false;
+  optimizeStepAt_ = millis();  // pace the first optimization step
   if (ladderExhausted_) {
     Serial.printf("WiFi connected: %s (TX power floor)\n",
                   WiFi.localIP().toString().c_str());
@@ -155,39 +147,74 @@ void WifiConnector::onConnected() {
   }
 }
 
-// While connected, reclaim link margin that the descend-only ladder can't:
-// after a long stable stretch, try one rung UP (more power) on the live
-// connection without reassociating. Keep it only if it survives a probation
-// window; a brownout during probation is caught by update()'s loss path, which
-// records the ceiling and falls back to the saved (lower) rung. Converges to
-// the highest stable rung over a few cycles, then rests.
-void WifiConnector::maybeAutoClimb() {
-  if (probing_) {
-    if (millis() - probeStartedAt_ >= kProbationMs) {
-      rung_ = probeTarget_;
-      saveGoodRung((int)rung_);
-      probing_ = false;
-      connectedSince_ = millis();  // earn a fresh stable window before the next climb
-      Serial.printf("WiFi TX power climbed to rung %u/%u and held — committed.\n",
-                    (unsigned)rung_ + 1, (unsigned)kLadderSize);
+// RSSI proxy → the lowest-power ladder rung that should still land a healthy
+// signal at the AP. We can't measure our own uplink, so we assume uplink path
+// loss ≈ the (measured) downlink path loss and estimate the power needed:
+//   required_tx = kTargetRssiAtApDbm + (kAssumedApTxDbm - rssi)
+// then pick the lowest-power rung whose dBm clears it.
+size_t WifiConnector::targetRungForRssi(int32_t rssi) const {
+  int32_t requiredTxDbm = kTargetRssiAtApDbm + (kAssumedApTxDbm - rssi);
+  // Scan from the floor (lowest power, highest index) upward; the first rung
+  // that meets the requirement is the lowest power that does.
+  for (int i = (int)kLadderSize - 1; i >= 0; i--) {
+    if (kLadder[i] / 4 >= requiredTxDbm) return (size_t)i;
+  }
+  return 0;  // even full power falls short — use it
+}
+
+// While connected, converge TX power DOWN to the lowest rung that keeps a
+// healthy link, so a node next to its AP runs cool. Asymmetric by design: quick
+// to add power when the signal weakens (raising power never drops the link),
+// deliberate to remove it (a down-step is verified before committing, and a
+// drop records a session power-floor via update()'s loss path).
+void WifiConnector::optimizePower() {
+  if (verifyingDown_) {
+    if (millis() - optimizeStepAt_ >= kVerifyMs) {
+      rung_ = downTarget_;  // held through the window → commit
+      verifyingDown_ = false;
+      optimizeStepAt_ = millis();
+      Serial.printf("TX power lowered to rung %u/%u (%.1f dBm), RSSI %d dBm.\n",
+                    (unsigned)rung_ + 1, (unsigned)kLadderSize, kLadder[rung_] / 4.0,
+                    (int)WiFi.RSSI());
     }
     return;
   }
-  if (rung_ <= minProbeIndex_) return;  // already at the session ceiling (or full power)
-  if (millis() - connectedSince_ < kStableBeforeProbeMs) return;  // not stable long enough yet
-  probeTarget_ = rung_ - 1;
-  probeStartedAt_ = millis();
-  probing_ = true;
-  WiFi.setTxPower(kLadder[probeTarget_]);  // live bump — no reassociation
-  Serial.printf("Stable — probing TX power up to rung %u/%u (%.1f dBm)...\n",
-                (unsigned)probeTarget_ + 1, (unsigned)kLadderSize,
-                kLadder[probeTarget_] / 4.0);
+  if (millis() - optimizeStepAt_ < kStepPaceMs) return;  // pace the steps
+  optimizeStepAt_ = millis();
+
+  int32_t rssi = WiFi.RSSI();
+  if (rssi >= 0 || rssi < -100) return;  // ignore obviously-invalid samples
+
+  int target = (int)targetRungForRssi(rssi);
+  if (target > (int)maxIndex_) target = (int)maxIndex_;  // respect this session's power floor
+  int diff = target - (int)rung_;
+
+  if (diff <= -1) {
+    // Need more power (target is a lower index). Step up one rung immediately —
+    // raising power can't drop the link, and we want to respond promptly.
+    rung_--;
+    WiFi.setTxPower(kLadder[rung_]);
+    Serial.printf("TX power raised to rung %u/%u (%.1f dBm), RSSI %d dBm.\n",
+                  (unsigned)rung_ + 1, (unsigned)kLadderSize, kLadder[rung_] / 4.0,
+                  (int)rssi);
+  } else if (diff >= 2) {
+    // Can likely use less power. Step down one rung, then verify it holds (an
+    // asymmetric dead-band: we only remove power when clearly worth it).
+    downTarget_ = rung_ + 1;
+    verifyingDown_ = true;
+    optimizeStepAt_ = millis();
+    WiFi.setTxPower(kLadder[downTarget_]);  // live — no reassociation
+    Serial.printf("Probing TX power down to rung %u/%u (%.1f dBm), RSSI %d dBm...\n",
+                  (unsigned)downTarget_ + 1, (unsigned)kLadderSize,
+                  kLadder[downTarget_] / 4.0, (int)rssi);
+  }
+  // diff in {0, +1}: within the dead-band — rest.
 }
 
 void WifiConnector::forceReprobe() {
-  Serial.println("Reprobe requested — restarting TX power ladder from full power.");
-  minProbeIndex_ = 0;  // re-open the upward search for this session
-  probing_ = false;
+  Serial.println("Reprobe requested — restarting from full power.");
+  maxIndex_ = kLadderSize - 1;  // re-open the full low-power range for this session
+  verifyingDown_ = false;
   connected_ = false;
   ladderExhausted_ = false;
   authFailed_ = false;
@@ -329,31 +356,4 @@ bool WifiConnector::pollScan() {
   }
   WiFi.scanDelete();
   return true;
-}
-
-// Returns the persisted rung index, or -1 if nothing is stored yet (or the
-// stored value no longer matches any rung in the ladder). -1 is distinct
-// from 0 so callers can tell "persisted at full power" apart from "never
-// persisted" when logging.
-int WifiConnector::loadStartRung() {
-  Preferences prefs;
-  prefs.begin(kPrefsNamespace, /*readOnly=*/true);
-  bool has = prefs.isKey(kPrefsKey);
-  int32_t stored = has ? prefs.getInt(kPrefsKey) : 0;
-  prefs.end();
-  if (!has) return -1;
-  for (size_t i = 0; i < kLadderSize; i++) {
-    if ((int32_t)kLadder[i] == stored) return (int)i;
-  }
-  return -1;  // stored value no longer in the ladder — start fresh
-}
-
-void WifiConnector::saveGoodRung(int rung) {
-  Preferences prefs;
-  prefs.begin(kPrefsNamespace, /*readOnly=*/false);
-  int32_t want = (int32_t)kLadder[rung];
-  if (!prefs.isKey(kPrefsKey) || prefs.getInt(kPrefsKey) != want) {
-    prefs.putInt(kPrefsKey, want);
-  }
-  prefs.end();
 }
