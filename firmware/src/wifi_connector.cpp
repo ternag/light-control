@@ -92,12 +92,22 @@ void WifiConnector::begin(const char *ssid, const char *password) {
 void WifiConnector::update() {
   if (connected_) {
     if (WiFi.status() != WL_CONNECTED) {
+      // A drop during a probation bump means the higher power browned out —
+      // remember it as this session's ceiling so we don't climb back into it.
+      if (probing_) {
+        minProbeIndex_ = probeTarget_ + 1;
+        probing_ = false;
+        Serial.printf("  upward probe to rung %u/%u browned out — ceiling set; falling back.\n",
+                      (unsigned)probeTarget_ + 1, (unsigned)kLadderSize);
+      }
       Serial.println("WiFi connection lost — reconnecting.");
       connected_ = false;
       ladderExhausted_ = false;
       int loaded = loadStartRung();
       startRungAttempt(loaded >= 0 ? (size_t)loaded : 0);
+      return;
     }
+    maybeAutoClimb();
     return;
   }
 
@@ -133,6 +143,8 @@ void WifiConnector::onConnected() {
   saveGoodRung((int)rung_);
   connected_ = true;
   authFailed_ = false;  // a successful connect clears the "needs a human" latch
+  probing_ = false;
+  connectedSince_ = millis();  // start the stable-for-6h clock for the auto-climb
   if (ladderExhausted_) {
     Serial.printf("WiFi connected: %s (TX power floor)\n",
                   WiFi.localIP().toString().c_str());
@@ -141,6 +153,46 @@ void WifiConnector::onConnected() {
                   WiFi.localIP().toString().c_str(), (unsigned)rung_ + 1,
                   (unsigned)kLadderSize);
   }
+}
+
+// While connected, reclaim link margin that the descend-only ladder can't:
+// after a long stable stretch, try one rung UP (more power) on the live
+// connection without reassociating. Keep it only if it survives a probation
+// window; a brownout during probation is caught by update()'s loss path, which
+// records the ceiling and falls back to the saved (lower) rung. Converges to
+// the highest stable rung over a few cycles, then rests.
+void WifiConnector::maybeAutoClimb() {
+  if (probing_) {
+    if (millis() - probeStartedAt_ >= kProbationMs) {
+      rung_ = probeTarget_;
+      saveGoodRung((int)rung_);
+      probing_ = false;
+      connectedSince_ = millis();  // earn a fresh stable window before the next climb
+      Serial.printf("WiFi TX power climbed to rung %u/%u and held — committed.\n",
+                    (unsigned)rung_ + 1, (unsigned)kLadderSize);
+    }
+    return;
+  }
+  if (rung_ <= minProbeIndex_) return;  // already at the session ceiling (or full power)
+  if (millis() - connectedSince_ < kStableBeforeProbeMs) return;  // not stable long enough yet
+  probeTarget_ = rung_ - 1;
+  probeStartedAt_ = millis();
+  probing_ = true;
+  WiFi.setTxPower(kLadder[probeTarget_]);  // live bump — no reassociation
+  Serial.printf("Stable — probing TX power up to rung %u/%u (%.1f dBm)...\n",
+                (unsigned)probeTarget_ + 1, (unsigned)kLadderSize,
+                kLadder[probeTarget_] / 4.0);
+}
+
+void WifiConnector::forceReprobe() {
+  Serial.println("Reprobe requested — restarting TX power ladder from full power.");
+  minProbeIndex_ = 0;  // re-open the upward search for this session
+  probing_ = false;
+  connected_ = false;
+  ladderExhausted_ = false;
+  authFailed_ = false;
+  WiFi.disconnect(true);
+  startRungAttempt(0);
 }
 
 // A scan just finished (scanSawSsid_/scanRssi_ are set). Decide what a failed
