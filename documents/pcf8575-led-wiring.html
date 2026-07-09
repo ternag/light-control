@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCF8575 — 8 LED Test Setup Wiring</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --ink: #e6e8ec;
+    --muted: #9aa1ad;
+    --accent: #4da3ff;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 36px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .lead { color: var(--muted); margin-top: 0; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 16px 0;
+  }
+  .key { border-left: 4px solid var(--accent); }
+  code {
+    background: #11141a;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.9em;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tbody tr:hover { background: #20242d; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .diagram-box {
+    background: #11141a;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  .note { color: var(--muted); font-size: 0.9rem; }
+  pre {
+    background: #11141a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+  }
+  .swatch { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; vertical-align:middle; border:1px solid #0006; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>PCF8575 — 8&nbsp;LED Test Setup</h1>
+  <p class="lead">Wiring 8 different-colour LEDs (each with its own resistor) to a PCF8575 I²C I/O expander.</p>
+
+  <div class="card key">
+    <strong>The one thing to get right:</strong> the PCF8575's outputs are
+    <em>quasi-bidirectional</em> — they <strong>sink</strong> current strongly but can only
+    <strong>source</strong> ~100&nbsp;µA through a weak internal pull-up. So wire each LED to
+    <strong>sink</strong>: anode toward VCC (through its resistor), cathode to the PCF8575 pin.
+    Writing the pin <strong>LOW&nbsp;(0)</strong> turns the LED <strong>ON</strong>; HIGH&nbsp;(1) turns it OFF.
+  </div>
+
+  <h2>Wiring Diagram</h2>
+  <div class="diagram-box">
+    <svg viewBox="0 0 760 560" role="img" aria-label="PCF8575 LED wiring schematic">
+      <defs>
+        <marker id="dot" markerWidth="6" markerHeight="6" refX="3" refY="3">
+          <circle cx="3" cy="3" r="3" fill="#e6e8ec"/>
+        </marker>
+      </defs>
+
+      <!-- styles -->
+      <style>
+        .wire { stroke:#7f8694; stroke-width:2; fill:none; }
+        .vcc  { stroke:#ff6b6b; stroke-width:3; fill:none; }
+        .gnd  { stroke:#5b6472; stroke-width:3; fill:none; }
+        .i2c  { stroke:#4da3ff; stroke-width:2.5; fill:none; }
+        .lbl  { fill:#e6e8ec; font:12px -apple-system,Segoe UI,sans-serif; }
+        .lblm { fill:#9aa1ad; font:11px -apple-system,Segoe UI,sans-serif; }
+        .pinlbl { fill:#cdd2db; font:11px monospace; }
+        .res  { fill:#2a2f3a; stroke:#c9a14a; stroke-width:1.5; }
+      </style>
+
+      <!-- VCC rail -->
+      <line class="vcc" x1="40" y1="40" x2="720" y2="40"/>
+      <text class="lbl" x="40" y="30" fill="#ff6b6b">+5V (VCC rail)</text>
+
+      <!-- GND rail -->
+      <line class="gnd" x1="40" y1="520" x2="720" y2="520"/>
+      <text class="lbl" x="40" y="540" fill="#9aa1ad">GND rail</text>
+
+      <!-- PCF8575 chip body -->
+      <rect x="300" y="150" width="160" height="240" rx="8" fill="#1a1d24" stroke="#2a2f3a" stroke-width="2"/>
+      <text class="lbl" x="380" y="180" text-anchor="middle" font-weight="700">PCF8575</text>
+      <text class="lblm" x="380" y="196" text-anchor="middle">I²C I/O expander</text>
+
+      <!-- chip top pins: VCC -->
+      <line class="vcc" x1="380" y1="40" x2="380" y2="150"/>
+      <circle cx="380" cy="40" r="3" fill="#ff6b6b"/>
+      <text class="pinlbl" x="388" y="145">VDD</text>
+
+      <!-- chip bottom pins: GND + A0/A1/A2 -->
+      <line class="gnd" x1="340" y1="390" x2="340" y2="520"/>
+      <text class="pinlbl" x="312" y="405">VSS</text>
+      <!-- address pins to GND -->
+      <line class="gnd" x1="380" y1="390" x2="380" y2="460"/>
+      <line class="gnd" x1="420" y1="390" x2="420" y2="460"/>
+      <line class="gnd" x1="400" y1="390" x2="400" y2="460"/>
+      <line class="gnd" x1="380" y1="460" x2="420" y2="460"/>
+      <line class="gnd" x1="400" y1="460" x2="400" y2="520"/>
+      <text class="pinlbl" x="372" y="478" fill="#9aa1ad">A0 A1 A2 → GND (addr 0x20)</text>
+
+      <!-- I2C lines from left of chip -->
+      <line class="i2c" x1="300" y1="220" x2="180" y2="220"/>
+      <text class="pinlbl" x="305" y="216">SDA</text>
+      <line class="i2c" x1="300" y1="250" x2="180" y2="250"/>
+      <text class="pinlbl" x="305" y="246">SCL</text>
+      <!-- pull-ups -->
+      <line class="i2c" x1="180" y1="220" x2="180" y2="100"/>
+      <line class="i2c" x1="210" y1="250" x2="210" y2="100"/>
+      <rect class="res" x="173" y="120" width="14" height="34" rx="3"/>
+      <rect class="res" x="203" y="120" width="14" height="34" rx="3"/>
+      <line class="i2c" x1="180" y1="100" x2="210" y2="100"/>
+      <line class="i2c" x1="195" y1="100" x2="195" y2="70"/>
+      <line class="vcc" x1="120" y1="70" x2="260" y2="70"/>
+      <text class="lblm" x="120" y="62">4.7kΩ pull-ups → 3.3V or 5V</text>
+      <text class="pinlbl" x="120" y="245" fill="#4da3ff">to MCU</text>
+      <line class="i2c" x1="180" y1="220" x2="120" y2="220"/>
+      <line class="i2c" x1="120" y1="220" x2="120" y2="250"/>
+
+      <!-- 8 LED channels on the right -->
+      <!-- helper: each channel = VCC -> resistor -> LED -> pin -->
+      <!-- We'll render 8 rows -->
+      <!-- Row template positions -->
+      <!-- y for pins on chip right side: spread 170..380 -->
+
+      <!-- Channel group -->
+      <g>
+        <!-- pin stubs from chip right edge -->
+        <!-- P00..P07 -->
+        <!-- We'll place LEDs in a column at x=620, resistors at x=560, tap from VCC -->
+
+        <!-- Row macro done manually -->
+        <!-- Row 1 P00 Red -->
+        <g>
+          <text class="pinlbl" x="464" y="180">P00</text>
+          <line class="wire" x1="460" y1="176" x2="640" y2="176"/>
+          <!-- LED -->
+          <polygon points="612,176 600,170 600,182" fill="#ff4d4d"/>
+          <line x1="600" y1="168" x2="600" y2="184" stroke="#ff4d4d" stroke-width="2"/>
+          <!-- resistor -->
+          <rect class="res" x="650" y="169" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="176" x2="650" y2="176"/>
+          <line class="vcc" x1="684" y1="176" x2="700" y2="176"/>
+          <line class="vcc" x1="700" y1="40" x2="700" y2="176"/>
+          <text class="lbl" x="500" y="172" fill="#ff4d4d">Red</text>
+        </g>
+
+        <!-- Row 2 P01 Orange -->
+        <g>
+          <text class="pinlbl" x="464" y="206">P01</text>
+          <line class="wire" x1="460" y1="202" x2="640" y2="202"/>
+          <polygon points="612,202 600,196 600,208" fill="#ff9f40"/>
+          <line x1="600" y1="194" x2="600" y2="210" stroke="#ff9f40" stroke-width="2"/>
+          <rect class="res" x="650" y="195" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="202" x2="650" y2="202"/>
+          <line class="vcc" x1="684" y1="202" x2="706" y2="202"/>
+          <line class="vcc" x1="706" y1="40" x2="706" y2="202"/>
+          <text class="lbl" x="500" y="198" fill="#ff9f40">Orange</text>
+        </g>
+
+        <!-- Row 3 P02 Yellow -->
+        <g>
+          <text class="pinlbl" x="464" y="232">P02</text>
+          <line class="wire" x1="460" y1="228" x2="640" y2="228"/>
+          <polygon points="612,228 600,222 600,234" fill="#ffe14d"/>
+          <line x1="600" y1="220" x2="600" y2="236" stroke="#ffe14d" stroke-width="2"/>
+          <rect class="res" x="650" y="221" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="228" x2="650" y2="228"/>
+          <line class="vcc" x1="684" y1="228" x2="712" y2="228"/>
+          <line class="vcc" x1="712" y1="40" x2="712" y2="228"/>
+          <text class="lbl" x="500" y="224" fill="#ffe14d">Yellow</text>
+        </g>
+
+        <!-- Row 4 P03 Green -->
+        <g>
+          <text class="pinlbl" x="464" y="258">P03</text>
+          <line class="wire" x1="460" y1="254" x2="640" y2="254"/>
+          <polygon points="612,254 600,248 600,260" fill="#4dd164"/>
+          <line x1="600" y1="246" x2="600" y2="262" stroke="#4dd164" stroke-width="2"/>
+          <rect class="res" x="650" y="247" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="254" x2="650" y2="254"/>
+          <line class="vcc" x1="684" y1="254" x2="718" y2="254"/>
+          <line class="vcc" x1="718" y1="40" x2="718" y2="254"/>
+          <text class="lbl" x="500" y="250" fill="#4dd164">Green</text>
+        </g>
+
+        <!-- Row 5 P04 Cyan -->
+        <g>
+          <text class="pinlbl" x="464" y="284">P04</text>
+          <line class="wire" x1="460" y1="280" x2="640" y2="280"/>
+          <polygon points="612,280 600,274 600,286" fill="#4ddbd1"/>
+          <line x1="600" y1="272" x2="600" y2="288" stroke="#4ddbd1" stroke-width="2"/>
+          <rect class="res" x="650" y="273" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="280" x2="650" y2="280"/>
+          <line class="vcc" x1="684" y1="280" x2="700" y2="280"/>
+          <line class="vcc" x1="700" y1="280" x2="700" y2="176"/>
+          <text class="lbl" x="500" y="276" fill="#4ddbd1">Cyan</text>
+        </g>
+
+        <!-- Row 6 P05 Blue -->
+        <g>
+          <text class="pinlbl" x="464" y="310">P05</text>
+          <line class="wire" x1="460" y1="306" x2="640" y2="306"/>
+          <polygon points="612,306 600,300 600,312" fill="#4da3ff"/>
+          <line x1="600" y1="298" x2="600" y2="314" stroke="#4da3ff" stroke-width="2"/>
+          <rect class="res" x="650" y="299" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="306" x2="650" y2="306"/>
+          <line class="vcc" x1="684" y1="306" x2="706" y2="306"/>
+          <line class="vcc" x1="706" y1="306" x2="706" y2="202"/>
+          <text class="lbl" x="500" y="302" fill="#4da3ff">Blue</text>
+        </g>
+
+        <!-- Row 7 P06 Purple -->
+        <g>
+          <text class="pinlbl" x="464" y="336">P06</text>
+          <line class="wire" x1="460" y1="332" x2="640" y2="332"/>
+          <polygon points="612,332 600,326 600,338" fill="#b06bff"/>
+          <line x1="600" y1="324" x2="600" y2="340" stroke="#b06bff" stroke-width="2"/>
+          <rect class="res" x="650" y="325" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="332" x2="650" y2="332"/>
+          <line class="vcc" x1="684" y1="332" x2="712" y2="332"/>
+          <line class="vcc" x1="712" y1="332" x2="712" y2="228"/>
+          <text class="lbl" x="500" y="328" fill="#b06bff">Purple</text>
+        </g>
+
+        <!-- Row 8 P07 White -->
+        <g>
+          <text class="pinlbl" x="464" y="362">P07</text>
+          <line class="wire" x1="460" y1="358" x2="640" y2="358"/>
+          <polygon points="612,358 600,352 600,364" fill="#f0f0f0"/>
+          <line x1="600" y1="350" x2="600" y2="366" stroke="#f0f0f0" stroke-width="2"/>
+          <rect class="res" x="650" y="351" width="34" height="14" rx="3"/>
+          <line class="wire" x1="640" y1="358" x2="650" y2="358"/>
+          <line class="vcc" x1="684" y1="358" x2="718" y2="358"/>
+          <line class="vcc" x1="718" y1="358" x2="718" y2="254"/>
+          <text class="lbl" x="500" y="354" fill="#f0f0f0">White</text>
+        </g>
+      </g>
+
+      <!-- legend -->
+      <g>
+        <rect x="40" y="430" width="200" height="74" rx="8" fill="#1a1d24" stroke="#2a2f3a"/>
+        <text class="lblm" x="52" y="450">Legend</text>
+        <line class="vcc" x1="52" y1="464" x2="80" y2="464"/>
+        <text class="pinlbl" x="86" y="468">+5V</text>
+        <line class="gnd" x1="52" y1="480" x2="80" y2="480"/>
+        <text class="pinlbl" x="86" y="484">GND</text>
+        <line class="i2c" x1="52" y1="496" x2="80" y2="496"/>
+        <text class="pinlbl" x="86" y="500">I²C (SDA/SCL)</text>
+        <rect class="res" x="150" y="458" width="24" height="10" rx="2"/>
+        <text class="pinlbl" x="180" y="467">resistor</text>
+        <polygon points="162,486 152,481 152,491" fill="#ff4d4d"/>
+        <text class="pinlbl" x="180" y="489">LED</text>
+      </g>
+
+      <text class="lblm" x="498" y="392">anode→cathode points at the pin (sink)</text>
+    </svg>
+  </div>
+  <p class="note">Each channel: <code>+5V → resistor → LED (anode→cathode) → PCF8575 pin</code>.
+  The LED triangle points toward the pin, so the pin pulling LOW completes the circuit to ground inside the chip.</p>
+
+  <h2>Connections Summary</h2>
+  <table>
+    <thead><tr><th>PCF8575 pin</th><th>Connects to</th></tr></thead>
+    <tbody>
+      <tr><td><code>VDD / VCC</code></td><td>+5V</td></tr>
+      <tr><td><code>VSS / GND</code></td><td>GND</td></tr>
+      <tr><td><code>A0, A1, A2</code></td><td>GND → I²C address <code>0x20</code></td></tr>
+      <tr><td><code>SDA</code></td><td>MCU SDA, plus 4.7kΩ pull-up to VCC</td></tr>
+      <tr><td><code>SCL</code></td><td>MCU SCL, plus 4.7kΩ pull-up to VCC</td></tr>
+      <tr><td><code>INT</code></td><td>leave unconnected</td></tr>
+      <tr><td><code>P00 – P07</code></td><td>cathode of each LED (anode → resistor → +5V)</td></tr>
+    </tbody>
+  </table>
+  <p class="note">If your microcontroller runs at 3.3V (ESP32, Raspberry Pi…), power the chip at 5V but
+  tie the I²C pull-ups to <strong>3.3V</strong>. I²C is open-drain, so the lines are only ever pulled
+  low — no level shifter needed.</p>
+
+  <h2>Resistor Values (VCC = 5V, ~5mA per LED)</h2>
+  <p class="note">R = (5V − V<sub>f</sub>) / 0.005A</p>
+  <table>
+    <thead><tr><th>Pin</th><th>Colour</th><th>Typ. V<sub>f</sub></th><th>Calculated R</th><th>Use (E12)</th></tr></thead>
+    <tbody>
+      <tr><td>P00</td><td><span class="swatch" style="background:#ff4d4d"></span>Red</td><td>2.0 V</td><td>600 Ω</td><td>560 Ω</td></tr>
+      <tr><td>P01</td><td><span class="swatch" style="background:#ff9f40"></span>Orange</td><td>2.0 V</td><td>600 Ω</td><td>560 Ω</td></tr>
+      <tr><td>P02</td><td><span class="swatch" style="background:#ffe14d"></span>Yellow</td><td>2.1 V</td><td>580 Ω</td><td>560 Ω</td></tr>
+      <tr><td>P03</td><td><span class="swatch" style="background:#4dd164"></span>Green (std)</td><td>2.1 V</td><td>580 Ω</td><td>560 Ω</td></tr>
+      <tr><td>P04</td><td><span class="swatch" style="background:#4ddbd1"></span>Cyan / emerald</td><td>3.0 V</td><td>400 Ω</td><td>390 Ω</td></tr>
+      <tr><td>P05</td><td><span class="swatch" style="background:#4da3ff"></span>Blue</td><td>3.2 V</td><td>360 Ω</td><td>330 Ω</td></tr>
+      <tr><td>P06</td><td><span class="swatch" style="background:#b06bff"></span>Purple / UV</td><td>3.3 V</td><td>340 Ω</td><td>330 Ω</td></tr>
+      <tr><td>P07</td><td><span class="swatch" style="background:#f0f0f0;border-color:#888"></span>White</td><td>3.2 V</td><td>360 Ω</td><td>330 Ω</td></tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <strong>Lazy option:</strong> a single <strong>470 Ω</strong> on every channel works fine for a test rig —
+    red runs ~6 mA, blue ~4 mA. Brightness varies slightly between colours but all light clearly,
+    and you only need one resistor value. Keep each LED ≤ 5–10 mA so total sink current stays comfortable
+    when many are on at once.
+  </div>
+
+  <h2>Quick Test (Arduino)</h2>
+  <pre><code>#include &lt;Wire.h&gt;
+#define ADDR 0x20   // A0=A1=A2 tied to GND
+
+void writeAll(uint16_t bits) {       // bit=0 → LED ON (pin sinks)
+  Wire.beginTransmission(ADDR);
+  Wire.write(bits &amp; 0xFF);            // P00–P07
+  Wire.write(bits &gt;&gt; 8);              // P10–P17
+  Wire.endTransmission();
+}
+
+void setup() { Wire.begin(); }
+
+void loop() {
+  for (int i = 0; i &lt; 8; i++) {       // chase one LED at a time
+    writeAll(~(1 &lt;&lt; i));              // 0 = on, so invert
+    delay(150);
+  }
+}</code></pre>
+  <p class="note">Writing <code>0x0000</code> turns all 8 LEDs on; <code>0xFFFF</code> turns them off.</p>
+
+</div>
+</body>
+</html>
