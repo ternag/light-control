@@ -21,19 +21,6 @@ const char *wifiStatusName(wl_status_t s) {
 
 }  // namespace
 
-/*
-1/10 = 19.5 dBm  (full power)
-2/10 = 17 dBm
-3/10 = 15 dBm
-4/10 = 13 dBm
-5/10 = 11 dBm
-6/10 = 8.5 dBm
-7/10 = 7 dBm
-8/10 = 5 dBm
-9/10 = 2 dBm
-10/10 = -1 dBm   (floor)
-*/
-
 const wifi_power_t WifiConnector::kLadder[] = {
     WIFI_POWER_19_5dBm, WIFI_POWER_17dBm,     WIFI_POWER_15dBm,
     WIFI_POWER_13dBm,   WIFI_POWER_11dBm,     WIFI_POWER_8_5dBm,
@@ -43,14 +30,26 @@ const wifi_power_t WifiConnector::kLadder[] = {
 const size_t WifiConnector::kLadderSize =
     sizeof(WifiConnector::kLadder) / sizeof(WifiConnector::kLadder[0]);
 
-WifiConnector::WifiConnector(void (*onTick)()) : onTick_(onTick) {}
+WifiConnector::State WifiConnector::state() const {
+  if (connected_) return State::kConnected;
+  return ladderExhausted_ ? State::kConnectingExhausted : State::kConnecting;
+}
 
-void WifiConnector::connect(const char *ssid, const char *password) {
+void WifiConnector::begin(const char *ssid, const char *password) {
+  ssid_ = ssid;
+  password_ = password;
+
   WiFi.mode(WIFI_STA);
+  // Own reconnection fully via update() — the ladder logic must be the only
+  // thing that ever re-associates, or the built-in auto-reconnect races it
+  // (silently retrying at the power that just failed) and the LED ends up
+  // lying about what's actually happening.
+  WiFi.setAutoReconnect(false);
   // Log the disconnect reason code on every drop. Invaluable for telling apart
   // a wrong password (202 AUTH_FAIL) from a missing/hidden AP (201 NO_AP_FOUND)
   // from a flaky link or weak transmit path (2 AUTH_EXPIRE, the usual symptom of
-  // a board that hears the AP but can't complete the handshake).
+  // a board that hears the AP but can't complete the handshake). begin() runs
+  // exactly once, so this never needs a dedup guard.
   WiFi.onEvent(
       [](WiFiEvent_t, WiFiEventInfo_t info) {
         Serial.printf("  [disconnect reason: %u]\n",
@@ -58,7 +57,7 @@ void WifiConnector::connect(const char *ssid, const char *password) {
       },
       ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
-  Serial.printf("Connecting to WiFi \"%s\"...\n", ssid);
+  Serial.printf("Connecting to WiFi \"%s\"...\n", ssid_);
   int loaded = loadStartRung();
   size_t startRung = loaded >= 0 ? (size_t)loaded : 0;
   if (loaded >= 0) {
@@ -66,29 +65,80 @@ void WifiConnector::connect(const char *ssid, const char *password) {
                   (unsigned)startRung + 1, (unsigned)kLadderSize);
   }
 
-  for (size_t rung = startRung; rung < kLadderSize; rung++) {
-    Serial.printf("  [%u/%u] trying %.1f dBm...\n", (unsigned)rung + 1,
-                  (unsigned)kLadderSize, kLadder[rung] / 4.0);
-    if (tryConnectAtPower(ssid, password, kLadder[rung], kPerLevelTimeoutMs)) {
-      saveGoodRung((int)rung);
-      Serial.printf("WiFi connected: %s (TX power rung %u/%u)\n",
-                    WiFi.localIP().toString().c_str(), (unsigned)rung + 1,
-                    (unsigned)kLadderSize);
-      return;
+  connected_ = false;
+  ladderExhausted_ = false;
+  waitingForScan_ = false;
+  startRungAttempt(startRung);
+}
+
+void WifiConnector::update() {
+  if (connected_) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi connection lost — reconnecting.");
+      connected_ = false;
+      ladderExhausted_ = false;
+      int loaded = loadStartRung();
+      startRungAttempt(loaded >= 0 ? (size_t)loaded : 0);
     }
+    return;
   }
 
-  // Exhausted the ladder — hold at the floor and keep retrying forever. If
-  // the lowest TX power still can't connect, the problem isn't TX power
-  // (wrong password, AP down, out of range) — climbing back up won't help.
-  size_t floor = kLadderSize - 1;
-  Serial.printf("  exhausted TX power ladder — holding at floor (%.1f dBm), retrying indefinitely.\n",
-                kLadder[floor] / 4.0);
-  while (!tryConnectAtPower(ssid, password, kLadder[floor], kPerLevelTimeoutMs)) {
+  if (waitingForScan_) {
+    if (!pollScan()) return;  // still scanning — check again next update()
+    waitingForScan_ = false;
+    advanceAfterFailure();
+    return;
   }
-  saveGoodRung((int)floor);
-  Serial.printf("WiFi connected: %s (TX power floor)\n",
-                WiFi.localIP().toString().c_str());
+
+  if (WiFi.status() == WL_CONNECTED) {
+    saveGoodRung((int)rung_);
+    connected_ = true;
+    if (ladderExhausted_) {
+      Serial.printf("WiFi connected: %s (TX power floor)\n",
+                    WiFi.localIP().toString().c_str());
+    } else {
+      Serial.printf("WiFi connected: %s (TX power rung %u/%u)\n",
+                    WiFi.localIP().toString().c_str(), (unsigned)rung_ + 1,
+                    (unsigned)kLadderSize);
+    }
+    return;
+  }
+
+  if (millis() - rungAttemptStart_ > kPerLevelTimeoutMs) {
+    Serial.printf("  timed out (%s) at this power level.\n",
+                  wifiStatusName(WiFi.status()));
+    WiFi.disconnect(true);
+    beginScan();
+    waitingForScan_ = true;
+  }
+}
+
+void WifiConnector::startRungAttempt(size_t rung) {
+  rung_ = rung;
+  WiFi.begin(ssid_, password_);
+  WiFi.setTxPower(kLadder[rung_]);
+  rungAttemptStart_ = millis();
+  Serial.printf("  [%u/%u] trying %.1f dBm...\n", (unsigned)rung_ + 1,
+                (unsigned)kLadderSize, kLadder[rung_] / 4.0);
+}
+
+// A failed rung's diagnostic scan (see beginScan()/pollScan()) has just
+// finished. Move to the next rung, or — once the ladder is exhausted — hold
+// at the floor and keep retrying it indefinitely. If the lowest TX power
+// still can't connect, the problem isn't TX power (wrong password, AP down,
+// out of range) — climbing back up won't help.
+void WifiConnector::advanceAfterFailure() {
+  if (!ladderExhausted_) {
+    rung_++;
+    if (rung_ >= kLadderSize) {
+      ladderExhausted_ = true;
+      rung_ = kLadderSize - 1;
+      Serial.printf(
+          "  exhausted TX power ladder — holding at floor (%.1f dBm), retrying indefinitely.\n",
+          kLadder[rung_] / 4.0);
+    }
+  }
+  startRungAttempt(rung_);
 }
 
 String WifiConnector::currentPowerLabel() {
@@ -105,47 +155,42 @@ String WifiConnector::currentPowerLabel() {
   return String(buf);
 }
 
-bool WifiConnector::tryConnectAtPower(const char *ssid, const char *password,
-                                       wifi_power_t power, uint32_t timeoutMs) {
-  WiFi.begin(ssid, password);
-  WiFi.setTxPower(power);
-
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    if (onTick_) onTick_();
-    delay(250);
-    if (millis() - start > timeoutMs) {
-      Serial.printf("  timed out (%s) at this power level.\n",
-                    wifiStatusName(WiFi.status()));
-      scanNetworks(ssid);
-      WiFi.disconnect(true);
-      delay(200);
-      return false;
-    }
-  }
-  return true;
-}
-
-// Diagnostic, only run when a connection attempt stalls: list the 2.4GHz
+// Diagnostic, only run when a connection attempt times out: list the 2.4GHz
 // networks the C3 can see (including hidden ones). Helps tell a missing/hidden
 // SSID apart from a wrong password. Note: this gateway must broadcast a plain
 // 2.4GHz SSID — band-steered single-SSID networks hide the 2.4 radio and won't
 // onboard the C3 (see project notes).
-void WifiConnector::scanNetworks(const char *ssid) {
+//
+// Runs async (scanNetworks(true, ...)) and is polled from update() via
+// pollScan() rather than blocked on — a synchronous scan takes a couple of
+// seconds, and a string of failed rungs during a bad-signal period must not
+// stall loop().
+void WifiConnector::beginScan() {
   Serial.println("Scanning for 2.4GHz networks (including hidden)...");
-  int n = WiFi.scanNetworks(/*async=*/false, /*show_hidden=*/true);
+  WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/true);
+}
+
+bool WifiConnector::pollScan() {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return false;
+  if (n == WIFI_SCAN_FAILED) {
+    Serial.println("  (scan failed)");
+    WiFi.scanDelete();
+    return true;
+  }
   if (n <= 0) {
     Serial.println("  (none found)");
-    return;
-  }
-  for (int i = 0; i < n; i++) {
-    String foundSsid = WiFi.SSID(i);
-    bool hidden = foundSsid.length() == 0;
-    Serial.printf("  %s%-24s ch%-3d %4ddBm\n", foundSsid == ssid ? "-> " : "   ",
-                  hidden ? "<hidden>" : foundSsid.c_str(), WiFi.channel(i),
-                  WiFi.RSSI(i));
+  } else {
+    for (int i = 0; i < n; i++) {
+      String foundSsid = WiFi.SSID(i);
+      bool hidden = foundSsid.length() == 0;
+      Serial.printf("  %s%-24s ch%-3d %4ddBm\n", foundSsid == ssid_ ? "-> " : "   ",
+                    hidden ? "<hidden>" : foundSsid.c_str(), WiFi.channel(i),
+                    WiFi.RSSI(i));
+    }
   }
   WiFi.scanDelete();
+  return true;
 }
 
 // Returns the persisted rung index, or -1 if nothing is stored yet (or the

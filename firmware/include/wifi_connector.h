@@ -10,30 +10,51 @@
 // still works for THIS board, instead of hardcoding one board's
 // known-good value for every board.
 // See .planning/2026-07-02-wifi-adaptive-tx-power-design.md.
+//
+// Runs as a non-blocking state machine: begin() kicks off the first attempt
+// and returns immediately; update() must be called every loop() iteration to
+// advance it. The initial connect, retrying a timed-out rung, and
+// reconnecting after a later WiFi loss all go through the same update() path
+// — there is no separate blocking call anywhere. This matters because the
+// node's own automations must keep running even on a board that never sees a
+// known AP; see .planning/2026-07-09-wifi-status-led-design.md.
 class WifiConnector {
  public:
-  // onTick is invoked roughly every 250ms while waiting on a connection
-  // attempt (e.g. to blink a status LED). WifiConnector has no knowledge of
-  // LED_PIN or any other board-specific hardware — that stays in the caller.
-  explicit WifiConnector(void (*onTick)() = nullptr);
+  enum class State { kConnecting, kConnectingExhausted, kConnected };
 
-  // Blocks until connected. Logs progress and diagnostics over Serial.
-  void connect(const char *ssid, const char *password);
+  WifiConnector() = default;
+
+  // Starts connecting. Non-blocking — returns immediately. Call once, from
+  // setup(). Later reconnects (after a WiFi loss) are handled internally by
+  // update(); begin() is never called a second time.
+  void begin(const char *ssid, const char *password);
+
+  // Advances the connection state machine by one step. Call every loop()
+  // iteration; never blocks.
+  void update();
+
+  State state() const;
+  bool isConnected() const { return connected_; }
 
   // Human-readable label for the TX power the radio is using right now
   // (queries the live hardware value, not Preferences), e.g. "rung 3/10".
-  // Lets callers report the in-use ladder rung continuously (e.g. in a
-  // periodic status print) rather than only in the one-shot connect() log.
   static String currentPowerLabel();
 
  private:
-  bool tryConnectAtPower(const char *ssid, const char *password,
-                          wifi_power_t power, uint32_t timeoutMs);
-  void scanNetworks(const char *ssid);
+  void startRungAttempt(size_t rung);
+  void advanceAfterFailure();
+  void beginScan();
+  bool pollScan();  // returns true once the scan has finished (results printed)
   int loadStartRung();
   void saveGoodRung(int rung);
 
-  void (*onTick_)();
+  const char *ssid_ = nullptr;
+  const char *password_ = nullptr;
+  bool connected_ = false;
+  bool ladderExhausted_ = false;
+  bool waitingForScan_ = false;
+  size_t rung_ = 0;
+  uint32_t rungAttemptStart_ = 0;
 
   static const wifi_power_t kLadder[10];  // exactly 10 rungs (19.5..-1 dBm) — the
                                            // bound itself is the compile-time guard;

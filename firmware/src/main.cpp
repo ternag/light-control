@@ -16,14 +16,16 @@
 // ---------------------------------------------------------------------------
 // light-control firmware node — v1 "discovery" walking skeleton.
 //
-//   1. Connects to WiFi (adaptive TX power — see wifi_connector.h).
+//   1. Connects to WiFi (adaptive TX power, non-blocking — see
+//      wifi_connector.h). loop() runs from boot regardless of WiFi state, so
+//      a board that never sees a known AP still runs its own automations.
 //   2. Announces itself on mDNS as a `_lightctrl._tcp` peer (TXT: id/name/
 //      type/proto) — the shared discovery contract (proto 1).
 //   3. Browses for other peers and keeps a roster in RAM.
 //   4. Prints the roster over serial (the node's only "UI" for now).
 //   5. Serves GET /api/peers so it's a genuine, curl-able peer.
 //
-// No LEDs / config / persistence yet — see .planning/ for the full design.
+// No PCA9685 light-pattern driving yet — see .planning/ for the full design.
 // ---------------------------------------------------------------------------
 
 static const char *PROTO_VERSION = "1";
@@ -31,9 +33,13 @@ static const char *SERVICE = "lightctrl"; // -> _lightctrl._tcp
 static const uint16_t HTTP_PORT = 80;
 static const uint32_t SCAN_INTERVAL_MS = 5000;
 
-// Onboard LED as a simple WiFi-status indicator (see CLAUDE.md for pin caveats).
+// Onboard LED as a WiFi-status indicator (see CLAUDE.md for pin caveats).
+// See .planning/2026-07-09-wifi-status-led-design.md for the state table.
 static const uint8_t LED_PIN = 8;
 static const bool LED_ACTIVE_LOW = true;
+static const uint32_t LED_GRACE_MS = 20000;              // solid-on window after connecting
+static const uint32_t LED_BLINK_PERIOD_MS = 500;          // connecting
+static const uint32_t LED_BLINK_PERIOD_EXHAUSTED_MS = 250; // ladder exhausted, holding at floor
 
 struct Peer {
   String id;
@@ -52,23 +58,32 @@ static bool g_pendingVerify = false;
 static uint32_t g_verifyDeadline = 0;
 
 static AsyncWebServer server(HTTP_PORT);
+static WifiConnector g_wifi;
+static bool g_networkReady = false; // mDNS + HTTP server started (once, on first connect)
+static bool g_ledGrace = false;
+static uint32_t g_ledGraceDeadline = 0;
 
 static void setLed(bool on) {
   digitalWrite(LED_PIN, (on ^ LED_ACTIVE_LOW) ? HIGH : LOW);
 }
 
-// Blinks the LED while WifiConnector waits on a connection attempt. Also
-// where the OTA health-check rollback lives: WifiConnector::connect() blocks
-// until connected, so an unverified image whose WiFi is broken must roll
-// back from here — loop() would never run otherwise.
-static void wifiTick() {
-  if (g_pendingVerify && millis() > g_verifyDeadline) {
-    Serial.println("OTA: health check FAILED (no WiFi) — rolling back");
-    esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
+// Derives LED behavior from WifiConnector's state every loop() tick — see
+// .planning/2026-07-09-wifi-status-led-design.md for the state table.
+static void updateLed() {
+  if (g_wifi.isConnected()) {
+    if (!g_ledGrace) {
+      setLed(false);
+    } else if (millis() > g_ledGraceDeadline) {
+      g_ledGrace = false;
+      setLed(false);
+    } else {
+      setLed(true);
+    }
+    return;
   }
-  static bool on = false;
-  on = !on;
-  setLed(on);
+  bool exhausted = g_wifi.state() == WifiConnector::State::kConnectingExhausted;
+  uint32_t period = exhausted ? LED_BLINK_PERIOD_EXHAUSTED_MS : LED_BLINK_PERIOD_MS;
+  setLed((millis() % period) < (period / 2));
 }
 
 // Serialize self + discovered peers into the roster JSON contract.
@@ -167,10 +182,9 @@ void setup() {
   Serial.println("\nlight-control firmware: boot OK");
   Serial.printf("firmware version: %s\n", FIRMWARE_VERSION);
 
-  // Arm the OTA health check BEFORE connecting: WifiConnector::connect() blocks
-  // until connected, so the "new image never gets WiFi" failure must be caught
-  // via wifiTick() (invoked during that wait), against a deadline that starts
-  // at boot.
+  // Arm the OTA health check BEFORE connecting: if this is an unverified
+  // image whose WiFi is broken, it must roll back within the deadline, which
+  // starts at boot. Checked every loop() iteration below.
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
   if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
@@ -180,11 +194,13 @@ void setup() {
     Serial.println("OTA: running a pending image — will confirm health for 30s");
   }
 
-  WifiConnector wifi(wifiTick);
-  wifi.connect(WIFI_SSID, WIFI_PASSWORD);
-  setLed(true); // solid = connected
-  startMdns();
+  // Non-blocking: returns immediately. loop() starts running right away, so
+  // this node's own automations aren't held hostage by WiFi ever coming up —
+  // g_wifi.update() (called from loop()) carries the connection forward.
+  g_wifi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  // mDNS + server.begin() need an IP, so they're deferred to loop() on first
+  // connect. Routes can be registered now regardless.
   server.on("/api/peers", HTTP_GET, [](AsyncWebServerRequest *req) {
     req->send(200, "application/json", rosterJson());
   });
@@ -215,9 +231,6 @@ void setup() {
         if (!otaRequest(url, sigUrl, version)) { req->send(409, "application/json", "{\"error\":\"update already in progress\"}"); return; }
         req->send(202, "application/json", "{\"status\":\"accepted\"}");
       });
-
-  server.begin();
-  Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
 }
 
 void loop() {
@@ -235,11 +248,36 @@ void loop() {
       esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
     }
   }
-  static uint32_t lastScan = 0;
-  if (millis() - lastScan >= SCAN_INTERVAL_MS) {
-    lastScan = millis();
-    scanPeers();
-    printRoster();
+
+  bool wasConnected = g_wifi.isConnected();
+  g_wifi.update();
+  bool nowConnected = g_wifi.isConnected();
+
+  if (nowConnected && !wasConnected) {
+    g_ledGrace = true;
+    g_ledGraceDeadline = millis() + LED_GRACE_MS;
+    if (!g_networkReady) {
+      startMdns();
+      server.begin();
+      g_networkReady = true;
+      Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
+    } else {
+      // Reconnected — the IP may have changed, so re-announce. The HTTP
+      // server itself doesn't need restarting; it isn't bound to an IP.
+      MDNS.end();
+      startMdns();
+    }
   }
+  updateLed();
+
+  if (nowConnected) {
+    static uint32_t lastScan = 0;
+    if (millis() - lastScan >= SCAN_INTERVAL_MS) {
+      lastScan = millis();
+      scanPeers();
+      printRoster();
+    }
+  }
+
   delay(50);
 }
