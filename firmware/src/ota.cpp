@@ -36,6 +36,13 @@ void otaRun() {
   g_running = true;
   Serial.printf("OTA: starting update to %s\n", g_version.c_str());
 
+  // Fetch the 64-byte signature first: a missing/short signature aborts the
+  // update before we stream the whole image and erase the OTA partition.
+  uint8_t sig[64];
+  if (!fetchSig(g_sigUrl, sig)) {
+    Serial.println("OTA: signature fetch failed"); g_running = false; return;
+  }
+
   const esp_partition_t *target = esp_ota_get_next_update_partition(nullptr);
   esp_ota_handle_t handle = 0;
   if (!target || esp_ota_begin(target, OTA_SIZE_UNKNOWN, &handle) != ESP_OK) {
@@ -77,10 +84,6 @@ void otaRun() {
   uint8_t digest[32];
   sha.finalize(digest, sizeof(digest));
 
-  uint8_t sig[64];
-  if (!fetchSig(g_sigUrl, sig)) {
-    Serial.println("OTA: signature fetch failed"); g_running = false; return;
-  }
   if (!fwVerify(digest, sig)) {
     Serial.println("OTA: signature INVALID — refusing to activate"); g_running = false; return;
   }

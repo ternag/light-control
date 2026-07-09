@@ -142,6 +142,12 @@ static void connectWifi() {
 
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    // This loop never exits until connected, so an unverified OTA image whose
+    // WiFi is broken must roll back from HERE — loop() would never run.
+    if (g_pendingVerify && millis() > g_verifyDeadline) {
+      Serial.println("OTA: health check FAILED (no WiFi) — rolling back");
+      esp_ota_mark_app_invalid_rollback_and_reboot(); // reboots into previous image
+    }
     setLed(true);
     delay(250);
     setLed(false);
@@ -225,6 +231,18 @@ void setup() {
   Serial.println("\nlight-control firmware: boot OK");
   Serial.printf("firmware version: %s\n", FIRMWARE_VERSION);
 
+  // Arm the OTA health check BEFORE connecting: connectWifi() blocks until
+  // connected, so the "new image never gets WiFi" failure must be caught inside
+  // its retry loop, against a deadline that starts at boot.
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
+      state == ESP_OTA_IMG_PENDING_VERIFY) {
+    g_pendingVerify = true;
+    g_verifyDeadline = millis() + 30000; // 30s to prove healthy
+    Serial.println("OTA: running a pending image — will confirm health for 30s");
+  }
+
   connectWifi();
   startMdns();
 
@@ -235,16 +253,20 @@ void setup() {
   server.on(
       "/api/update", HTTP_POST,
       [](AsyncWebServerRequest *req) {
-        // Completion callback: the body handler already responded.
-        if (!req->_tempObject) req->send(400, "application/json", "{\"error\":\"empty body\"}");
+        // Completion callback: if a body arrived, its handler responded already.
+        if (!req->_tempObject) req->send(400, "application/json", "{\"error\":\"missing or oversized body\"}");
       },
       nullptr,
       [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total) {
-        static String body;
-        if (index == 0) body = "";
-        body.concat(reinterpret_cast<const char *>(data), len);
+        // Accumulate into a per-request buffer. _tempObject is freed with the
+        // request by the framework; a shared/static buffer would let two
+        // in-flight requests corrupt each other's body.
+        if (total == 0 || total > 2048) return; // no/oversized body -> completion cb sends 400
+        if (index == 0) req->_tempObject = calloc(total + 1, 1);
+        char *body = static_cast<char *>(req->_tempObject);
+        if (!body) return; // alloc failed -> completion cb sends 400
+        memcpy(body + index, data, len);
         if (index + len < total) return; // wait for the whole body
-        req->_tempObject = (void *)1; // mark handled
         JsonDocument doc;
         if (deserializeJson(doc, body)) { req->send(400, "application/json", "{\"error\":\"bad json\"}"); return; }
         String url = doc["url"] | "";
@@ -257,15 +279,6 @@ void setup() {
 
   server.begin();
   Serial.printf("HTTP API on http://%s.local/api/peers\n", g_name.c_str());
-
-  const esp_partition_t *running = esp_ota_get_running_partition();
-  esp_ota_img_states_t state;
-  if (esp_ota_get_state_partition(running, &state) == ESP_OK &&
-      state == ESP_OTA_IMG_PENDING_VERIFY) {
-    g_pendingVerify = true;
-    g_verifyDeadline = millis() + 30000; // 30s to prove healthy
-    Serial.println("OTA: running a pending image — will confirm health for 30s");
-  }
 }
 
 void loop() {
