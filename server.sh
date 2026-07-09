@@ -49,6 +49,7 @@ start() {
   (
     cd "$SERVER_DIR"
     NODE_NAME="$NODE_NAME" PORT="$PORT" ${PEER_TTL_MS:+PEER_TTL_MS="$PEER_TTL_MS"} \
+      ${ADVERTISE_IP:+ADVERTISE_IP="$ADVERTISE_IP"} \
       nohup node_modules/.bin/tsx src/index.ts >"$LOG_FILE" 2>&1 &
     echo $! >"$PID_FILE"
   )

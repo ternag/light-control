@@ -1,5 +1,10 @@
 import type { FirmwareRelease } from "./release.js";
 
+/** LAN-serving routes for the cached image — shared by the HTTP server (which
+ * serves them) and the update trigger (which embeds them in URLs sent to nodes). */
+export const FIRMWARE_BIN_PATH = "/api/firmware/latest/bin";
+export const FIRMWARE_SIG_PATH = "/api/firmware/latest/sig";
+
 export interface CachedFirmware {
   version: string;
   bin: Buffer;
