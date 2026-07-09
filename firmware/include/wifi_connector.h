@@ -10,28 +10,83 @@
 // still works for THIS board, instead of hardcoding one board's
 // known-good value for every board.
 // See .planning/2026-07-02-wifi-adaptive-tx-power-design.md.
+//
+// Runs as a non-blocking state machine: begin() kicks off the first attempt
+// and returns immediately; update() must be called every loop() iteration to
+// advance it. The initial connect, retrying a timed-out rung, and
+// reconnecting after a later WiFi loss all go through the same update() path
+// — there is no separate blocking call anywhere. This matters because the
+// node's own automations must keep running even on a board that never sees a
+// known AP; see .planning/2026-07-09-wifi-status-led-design.md.
 class WifiConnector {
  public:
-  // onTick is invoked roughly every 250ms while waiting on a connection
-  // attempt (e.g. to blink a status LED). WifiConnector has no knowledge of
-  // LED_PIN or any other board-specific hardware — that stays in the caller.
-  explicit WifiConnector(void (*onTick)() = nullptr);
+  // kAuthFailed is latched once we see an AUTH_FAIL against a present AP: a
+  // wrong compiled-in password can't self-heal, so it stays until a genuine
+  // connect. Callers surface it distinctly (an SOS blink — "needs a human").
+  enum class State { kConnecting, kConnectingExhausted, kConnected, kAuthFailed };
 
-  // Blocks until connected. Logs progress and diagnostics over Serial.
-  void connect(const char *ssid, const char *password);
+  WifiConnector() = default;
+
+  // Starts connecting. Non-blocking — returns immediately. Call once, from
+  // setup(). Later reconnects (after a WiFi loss) are handled internally by
+  // update(); begin() is never called a second time.
+  void begin(const char *ssid, const char *password);
+
+  // Advances the connection state machine by one step. Call every loop()
+  // iteration; never blocks.
+  void update();
+
+  State state() const;
+  bool isConnected() const { return connected_; }
+
+  // Human-readable label for the TX power the radio is using right now
+  // (queries the live hardware value, not Preferences), e.g. "rung 3/10".
+  static String currentPowerLabel();
 
  private:
-  bool tryConnectAtPower(const char *ssid, const char *password,
-                          wifi_power_t power, uint32_t timeoutMs);
-  void scanNetworks(const char *ssid);
+  // A failed rung means one of several things, and only one of them is fixed
+  // by lowering TX power. We descend the ladder ONLY on positive evidence of
+  // radio brownout — the AP is audibly present (in the scan) and reasonably
+  // strong, yet association still fails for a non-credential reason. Every
+  // other failure holds the current rung instead of walking down and
+  // corrupting the saved last-known-good:
+  //   - AP not in the scan  → it's off / out of range / 5GHz-only. TX power is
+  //     irrelevant; poll (kWaiting) until it reappears, then retry this rung.
+  //   - AP present, AUTH_FAIL → wrong password. A credential problem, not a
+  //     power one; retry this rung (it will keep failing, harmlessly).
+  //   - AP present but faint (RSSI below the floor) → the link is range-limited;
+  //     descending TX would only weaken our transmit further. Hold this rung.
+  // See .planning/2026-07-09-wifi-status-led-design.md.
+  enum class Phase { kAttempting, kScanning, kWaiting };
+
+  void startRungAttempt(size_t rung);  // (re)associate at rung; enters kAttempting
+  void onConnected();
+  void onScanComplete();  // decide: descend, retry-same, or wait
+  void descendLadder();   // brownout evidence → step down one rung (or hold at floor)
+  void enterWaiting();    // AP absent → schedule the next presence scan
+  void beginScan();
+  bool pollScan();  // true once the scan has finished; sets scanSawSsid_/scanRssi_
   int loadStartRung();
   void saveGoodRung(int rung);
 
-  void (*onTick_)();
+  const char *ssid_ = nullptr;
+  const char *password_ = nullptr;
+  bool connected_ = false;
+  bool ladderExhausted_ = false;
+  bool authFailed_ = false;  // latched on AUTH_FAIL; cleared only on a real connect
+  Phase phase_ = Phase::kAttempting;
+  bool scanToDiagnose_ = false;  // scan follows a failed attempt (may descend) vs. polling for an absent AP
+  bool scanSawSsid_ = false;
+  int32_t scanRssi_ = -127;
+  size_t rung_ = 0;
+  uint32_t rungAttemptStart_ = 0;
+  uint32_t nextScanAt_ = 0;
 
   static const wifi_power_t kLadder[10];  // exactly 10 rungs (19.5..-1 dBm) — the
                                            // bound itself is the compile-time guard;
                                            // wifi_connector.cpp's initializer must match it.
   static const size_t kLadderSize;
   static const uint32_t kPerLevelTimeoutMs = 7000;
+  static const uint32_t kApPollIntervalMs = 3000;   // re-scan cadence while waiting for an absent AP
+  static const int32_t kDescendRssiFloorDbm = -80;  // only descend if the AP is at least this strong
 };
