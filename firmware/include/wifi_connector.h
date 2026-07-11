@@ -103,6 +103,7 @@ class WifiConnector {
 
   // RSSI-guided power minimization (while connected). All RAM-only; nothing about
   // TX power persists across boots (see the class comment on cold-connect).
+  size_t minIndex_ = 0;                // highest power (lowest index) allowed: the rung we cold-connected at — everything above it browned out, so the optimizer must never raise past it
   size_t maxIndex_ = kLadderSize - 1;  // lowest power (highest index) allowed this session; lowered when a down-step drops the link
   bool verifyingDown_ = false;         // a down-step is in its hold window, awaiting confirmation it holds
   size_t downTarget_ = 0;              // the (lower-power) rung being verified

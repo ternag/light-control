@@ -136,6 +136,7 @@ void WifiConnector::onConnected() {
   connected_ = true;
   authFailed_ = false;  // a successful connect clears the "needs a human" latch
   verifyingDown_ = false;
+  minIndex_ = rung_;  // brownout ceiling: every rung above this one failed to cold-connect, so the optimizer must never raise past it
   optimizeStepAt_ = millis();  // pace the first optimization step
   if (ladderExhausted_) {
     Serial.printf("WiFi connected: %s (TX power floor)\n",
@@ -186,7 +187,8 @@ void WifiConnector::optimizePower() {
   if (rssi >= 0 || rssi < -100) return;  // ignore obviously-invalid samples
 
   int target = (int)targetRungForRssi(rssi);
-  if (target > (int)maxIndex_) target = (int)maxIndex_;  // respect this session's power floor
+  if (target < (int)minIndex_) target = (int)minIndex_;  // never raise past the brownout ceiling (the cold-connect rung)
+  if (target > (int)maxIndex_) target = (int)maxIndex_;  // never lower past this session's power floor
   int diff = target - (int)rung_;
 
   if (diff <= -1) {
