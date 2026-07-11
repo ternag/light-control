@@ -3,39 +3,38 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-// Connects to WiFi, stepping TX power down a fixed ladder (best signal
-// quality first) until a rung produces a stable connection. Some ESP32-C3
-// SuperMini clones brown out their radio's regulator at full TX power,
-// failing the auth handshake; probing down finds the lowest power that
-// still works for THIS board, instead of hardcoding one board's
-// known-good value for every board.
-// See .planning/2026-07-02-wifi-adaptive-tx-power-design.md.
+// Connects to WiFi by CLIMBING a fixed TX-power ladder from a cool default
+// upward, using the lowest power that reaches the AP. It starts at kStartTxPower
+// (a modest, low-heat level) and only steps toward more power when that rung
+// can't reach the AP. This inverts the older "start at full power and descend"
+// scheme: on weak-regulator ESP32-C3 SuperMini clones full power browns out the
+// radio's regulator and fails the handshake, so a strategy that begins high and
+// only descends can strand those boards on a browning rung when the AP is faint.
+// Climbing from a cool default never touches the browning high rungs unless a
+// rung below them has already failed to connect — so a nearby board settles cool
+// and a board that browns out at full power is a genuinely-unreachable edge case.
+// See .planning/2026-07-09-tx-power-climb-from-default-design.md.
 //
 // Runs as a non-blocking state machine: begin() kicks off the first attempt
 // and returns immediately; update() must be called every loop() iteration to
-// advance it. The initial connect, retrying a timed-out rung, and
-// reconnecting after a later WiFi loss all go through the same update() path
-// — there is no separate blocking call anywhere. This matters because the
-// node's own automations must keep running even on a board that never sees a
-// known AP; see .planning/2026-07-09-wifi-status-led-design.md.
+// advance it. The initial connect, retrying a timed-out rung, climbing to more
+// power, and reconnecting after a later WiFi loss all go through the same
+// update() path — there is no separate blocking call anywhere. This matters
+// because the node's own automations must keep running even on a board that
+// never sees a known AP; see .planning/2026-07-09-wifi-status-led-design.md.
 //
-// Once connected, update() runs an RSSI-guided power minimization: it converges
-// TX power DOWN to the lowest rung that still keeps a healthy link, so a node
-// next to its AP runs cool instead of blasting full power for no benefit. The
-// board can't measure its own uplink, so it uses the (downlink) RSSI as a
-// distance proxy to pick a target rung, steps toward it, and falls back
-// empirically if a rung can't hold. forceReprobe() re-walks from full power on
-// demand. See .planning/2026-07-09-rssi-power-minimization-design.md.
-//
-// Cold connect always starts at full power and descends: the ladder only goes
-// down, so starting anywhere else could strand a moved-away board unable to
-// climb for the power it now needs. Nothing about TX power persists across
-// boots — each session re-derives it.
+// Once connected it holds that rung — no while-connected power adjustment. The
+// start rung is already cool, so a node near its AP connects there and stays.
+// Every (re)connect and forceReprobe() restarts the climb from kStartTxPower;
+// nothing about TX power persists across boots — each session re-derives it.
 class WifiConnector {
  public:
   // kAuthFailed is latched once we see an AUTH_FAIL against a present AP: a
   // wrong compiled-in password can't self-heal, so it stays until a genuine
   // connect. Callers surface it distinctly (an SOS blink — "needs a human").
+  // kConnectingExhausted means the climb reached full power without connecting
+  // (AP present but unreachable) and is re-probing from the cool default;
+  // callers surface it distinctly (a fast double-blink — "trying hard, no luck").
   enum class State { kConnecting, kConnectingExhausted, kConnected, kAuthFailed };
 
   WifiConnector() = default;
@@ -52,10 +51,9 @@ class WifiConnector {
   State state() const;
   bool isConnected() const { return connected_; }
 
-  // Restart from full power, forgetting this session's power-floor. For a manual
-  // "I changed this node's situation, re-optimize now" trigger (e.g. a
-  // BOOT-button long-press). Non-blocking; after it reconnects, the RSSI
-  // optimizer cools it back down.
+  // Restart the climb from the cool default. For a manual "I changed this node's
+  // situation, re-probe now" trigger (e.g. a BOOT-button long-press).
+  // Non-blocking.
   void forceReprobe();
 
   // Human-readable label for the TX power the radio is using right now
@@ -63,61 +61,49 @@ class WifiConnector {
   static String currentPowerLabel();
 
  private:
-  // A failed rung means one of several things, and only one of them is fixed
-  // by lowering TX power. We descend the ladder ONLY on positive evidence of
-  // radio brownout — the AP is audibly present (in the scan) and reasonably
-  // strong, yet association still fails for a non-credential reason. Every
-  // other failure holds the current rung instead of walking down and
-  // corrupting the saved last-known-good:
+  // A failed rung means one of several things, and only one of them is fixed by
+  // adding TX power. We climb the ladder (add power) ONLY when the AP is audibly
+  // present (in the scan) yet association failed for a non-credential reason —
+  // i.e. our transmit didn't reach it. Every other failure holds the current
+  // rung instead of climbing pointlessly into the browning high rungs:
   //   - AP not in the scan  → it's off / out of range / 5GHz-only. TX power is
   //     irrelevant; poll (kWaiting) until it reappears, then retry this rung.
   //   - AP present, AUTH_FAIL → wrong password. A credential problem, not a
-  //     power one; retry this rung (it will keep failing, harmlessly).
-  //   - AP present but faint (RSSI below the floor) → the link is range-limited;
-  //     descending TX would only weaken our transmit further. Hold this rung.
-  // See .planning/2026-07-09-wifi-status-led-design.md.
+  //     power one; retry this rung (it will keep failing, harmlessly) and latch
+  //     the auth-failed state for the SOS blink.
+  // See .planning/2026-07-09-tx-power-climb-from-default-design.md.
   enum class Phase { kAttempting, kScanning, kWaiting };
 
   void startRungAttempt(size_t rung);  // (re)associate at rung; enters kAttempting
   void onConnected();
-  void onScanComplete();  // decide: descend, retry-same, or wait
-  void descendLadder();   // brownout evidence → step down one rung (or hold at floor)
+  void onScanComplete();  // decide: climb, retry-same, or wait
+  void climbLadder();     // AP present but unreached → step up one rung (or re-probe from the default at the top)
   void enterWaiting();    // AP absent → schedule the next presence scan
-  void optimizePower();   // while connected: converge TX power to the lowest rung that holds
-  size_t targetRungForRssi(int32_t rssi) const;  // RSSI proxy → lowest-power rung with margin
   void beginScan();
   bool pollScan();  // true once the scan has finished; sets scanSawSsid_/scanRssi_
 
   const char *ssid_ = nullptr;
   const char *password_ = nullptr;
   bool connected_ = false;
-  bool ladderExhausted_ = false;
+  bool ladderExhausted_ = false;  // latched when the climb hit full power without connecting; re-probing from the default
   bool authFailed_ = false;  // latched on AUTH_FAIL; cleared only on a real connect
   Phase phase_ = Phase::kAttempting;
-  bool scanToDiagnose_ = false;  // scan follows a failed attempt (may descend) vs. polling for an absent AP
+  bool scanToDiagnose_ = false;  // scan follows a failed attempt (may climb) vs. polling for an absent AP
   bool scanSawSsid_ = false;
   int32_t scanRssi_ = -127;
   size_t rung_ = 0;
+  size_t startRung_ = 0;  // ladder index of kStartTxPower; the climb's starting/rest rung (set in begin())
   uint32_t rungAttemptStart_ = 0;
   uint32_t nextScanAt_ = 0;
 
-  // RSSI-guided power minimization (while connected). All RAM-only; nothing about
-  // TX power persists across boots (see the class comment on cold-connect).
-  size_t maxIndex_ = kLadderSize - 1;  // lowest power (highest index) allowed this session; lowered when a down-step drops the link
-  bool verifyingDown_ = false;         // a down-step is in its hold window, awaiting confirmation it holds
-  size_t downTarget_ = 0;              // the (lower-power) rung being verified
-  uint32_t optimizeStepAt_ = 0;        // millis() of the last step / hold start — paces optimizePower()
-
-  static const wifi_power_t kLadder[10];  // exactly 10 rungs (19.5..-1 dBm) — the
+  static const wifi_power_t kLadder[10];  // exactly 10 rungs (19.5..-1 dBm), index 0 = most power — the
                                            // bound itself is the compile-time guard;
                                            // wifi_connector.cpp's initializer must match it.
   static const size_t kLadderSize;
-  static const uint32_t kPerLevelTimeoutMs = 7000;
+  // The cool default the climb starts (and rests) at. Lower = cooler but reaches
+  // less far before it has to climb; the sole tuning knob for rest power. Must be
+  // one of the kLadder values.
+  static const wifi_power_t kStartTxPower = WIFI_POWER_8_5dBm;
+  static const uint32_t kPerLevelTimeoutMs = 6000;
   static const uint32_t kApPollIntervalMs = 3000;   // re-scan cadence while waiting for an absent AP
-  static const int32_t kDescendRssiFloorDbm = -80;  // only descend (on brownout) if the AP is at least this strong
-  // RSSI-guided power minimization tunables:
-  static const int32_t kAssumedApTxDbm = 20;        // assumed AP transmit power (erring high → safe, more margin)
-  static const int32_t kTargetRssiAtApDbm = -65;    // desired RSSI at the AP (~25 dB above sensitivity)
-  static const uint32_t kStepPaceMs = 1500;         // minimum gap between optimization steps
-  static const uint32_t kVerifyMs = 6000;           // hold a down-step this long before committing (must exceed the AP's beacon timeout to catch a too-low rung)
 };
