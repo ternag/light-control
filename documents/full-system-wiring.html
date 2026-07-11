@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Full System Wiring — ESP32-C3 · PCF8575 · PCA9685</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --ink: #e6e8ec;
+    --muted: #9aa1ad;
+    --accent: #4da3ff;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 36px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .lead { color: var(--muted); margin-top: 0; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 16px 0;
+  }
+  .key { border-left: 4px solid var(--accent); }
+  .warn { border-left: 4px solid #ff6b6b; }
+  code {
+    background: #11141a;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.9em;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tbody tr:hover { background: #20242d; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .diagram-box {
+    background: #11141a;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+  svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  .note { color: var(--muted); font-size: 0.9rem; }
+  .swatch { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; vertical-align:middle; border:1px solid #0006; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:.8rem; border:1px solid var(--border); }
+  .p5 { color:#ff9b9b; border-color:#5a2f2f; }
+  .p33 { color:#ffd89b; border-color:#5a4a2f; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Full System Wiring</h1>
+  <p class="lead">ESP32-C3 controller → PCF8575 I/O expander → PCA9685 LED driver → LEDs.
+  Two power rails, one shared ground — and the 5&nbsp;V never touches the PCF8575.</p>
+
+  <div class="card key">
+    <strong>The whole design in one sentence:</strong> everything <em>logic</em> lives on a single
+    <span class="pill p33">3.3&nbsp;V</span> rail (safe for the C3's GPIOs), the LEDs live on a separate
+    <span class="pill p5">5&nbsp;V</span> rail, and <strong>all grounds are tied together</strong>.
+    The PCF8575 board runs fully at 3.3&nbsp;V (its <code>VCC–VDD</code> bridge closed), so it never sees 5&nbsp;V.
+  </div>
+
+  <h2>Wiring Diagram</h2>
+  <div class="diagram-box">
+    <svg viewBox="0 0 880 560" role="img" aria-label="Full system wiring: ESP32-C3, PCF8575, PCA9685 and LEDs across a 5V and a 3.3V rail with common ground">
+      <style>
+        .v5   { stroke:#ff6b6b; stroke-width:3; fill:none; }
+        .v33  { stroke:#ffb454; stroke-width:3; fill:none; }
+        .gnd  { stroke:#5b6472; stroke-width:3; fill:none; }
+        .i2c  { stroke:#4da3ff; stroke-width:2.5; fill:none; }
+        .cable{ stroke:#7f8694; stroke-width:3; fill:none; }
+        .wire { stroke:#7f8694; stroke-width:2; fill:none; }
+        .no5  { stroke:#ff6b6b; stroke-width:2; fill:none; stroke-dasharray:4 4; opacity:.7; }
+        .box  { fill:#1a1d24; stroke:#2a2f3a; stroke-width:2; }
+        .island { fill:#4da3ff; opacity:.05; stroke:#4da3ff; stroke-opacity:.35; stroke-dasharray:5 4; stroke-width:1.5; }
+        .lbl  { fill:#e6e8ec; font:13px -apple-system,Segoe UI,sans-serif; }
+        .lblm { fill:#9aa1ad; font:11px -apple-system,Segoe UI,sans-serif; }
+        .acc  { fill:#4da3ff; font:10px -apple-system,Segoe UI,sans-serif; }
+        .pin  { fill:#cdd2db; font:10px monospace; }
+        .res  { fill:#2a2f3a; stroke:#c9a14a; stroke-width:1.5; }
+        .jx   { fill:#4da3ff; }
+      </style>
+
+      <!-- ================= RAILS ================= -->
+      <line class="v5"  x1="20"  y1="55"  x2="860" y2="55"/>
+      <text class="lbl" x="24" y="46" fill="#ff6b6b">+5 V &#183; USB-C VBUS (from ESP32 &#8220;5V&#8221; pin)</text>
+
+      <line class="v33" x1="95"  y1="105" x2="760" y2="105"/>
+      <text class="lbl" x="99" y="97" fill="#ffb454">+3.3 V &#183; logic rail (from ESP32 &#8220;3V3&#8221; pin)</text>
+
+      <line class="gnd" x1="20"  y1="510" x2="860" y2="510"/>
+      <text class="lbl" x="24" y="530" fill="#9aa1ad">GND &#183; common ground — tie ALL grounds together</text>
+
+      <!-- 3.3 V logic island shading (ESP32 + PCF8575) -->
+      <rect class="island" x="126" y="160" width="378" height="222" rx="10"/>
+      <text class="acc" x="132" y="176">3.3 V logic island</text>
+
+      <!-- ================= USB-C ================= -->
+      <rect class="box" x="20" y="205" width="80" height="62" rx="8"/>
+      <text class="lbl"  x="60" y="232" text-anchor="middle" font-weight="700">USB-C</text>
+      <text class="lblm" x="60" y="250" text-anchor="middle">wall 5 V</text>
+      <line class="cable" x1="100" y1="236" x2="135" y2="236"/>
+      <text class="lblm" x="101" y="229">cable</text>
+
+      <!-- ================= ESP32-C3 ================= -->
+      <rect class="box" x="135" y="170" width="150" height="200" rx="8"/>
+      <text class="lbl"  x="210" y="203" text-anchor="middle" font-weight="700">ESP32-C3</text>
+      <text class="lblm" x="210" y="219" text-anchor="middle">controller</text>
+      <!-- power -->
+      <line class="v5"  x1="175" y1="170" x2="175" y2="55"/>
+      <text class="pin" x="180" y="186">5V</text>
+      <line class="v33" x1="250" y1="170" x2="250" y2="105"/>
+      <text class="pin" x="230" y="186">3V3</text>
+      <line class="gnd" x1="170" y1="370" x2="170" y2="510"/>
+      <text class="pin" x="149" y="362">GND</text>
+      <!-- i2c -->
+      <line class="i2c" x1="230" y1="370" x2="230" y2="420"/>
+      <text class="pin" x="213" y="362">SDA</text>
+      <line class="i2c" x1="258" y1="370" x2="258" y2="445"/>
+      <text class="pin" x="255" y="386">SCL</text>
+      <text class="lblm" x="205" y="404">GPIO4 / GPIO5</text>
+
+      <!-- ================= PCF8575 ================= -->
+      <rect class="box" x="330" y="180" width="165" height="135" rx="8"/>
+      <text class="lbl"  x="412" y="206" text-anchor="middle" font-weight="700">PCF8575 board</text>
+      <text class="lblm" x="412" y="222" text-anchor="middle">16-bit I/O expander</text>
+      <text class="acc"  x="412" y="242" text-anchor="middle">VCC&#8211;VDD bridged &#8594; 3.3 V</text>
+      <!-- power -->
+      <line class="v33" x1="375" y1="180" x2="375" y2="105"/>
+      <text class="pin" x="378" y="196">VCC</text>
+      <line class="gnd" x1="450" y1="315" x2="450" y2="510"/>
+      <text class="pin" x="432" y="332">GND</text>
+      <!-- i2c -->
+      <line class="i2c" x1="375" y1="315" x2="375" y2="420"/>
+      <text class="pin" x="352" y="332">SDA</text>
+      <line class="i2c" x1="405" y1="315" x2="405" y2="445"/>
+      <text class="pin" x="408" y="332">SCL</text>
+      <!-- NO 5V callout -->
+      <line class="no5" x1="430" y1="60" x2="430" y2="150"/>
+      <line x1="424" y1="149" x2="436" y2="161" stroke="#ff6b6b" stroke-width="2"/>
+      <line x1="436" y1="149" x2="424" y2="161" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="442" y="150" fill="#ff6b6b" font="10px sans-serif" style="font:10px sans-serif">5 V not connected here</text>
+
+      <!-- ================= PCA9685 ================= -->
+      <rect class="box" x="545" y="170" width="180" height="200" rx="8"/>
+      <text class="lbl"  x="635" y="200" text-anchor="middle" font-weight="700">PCA9685</text>
+      <text class="lblm" x="635" y="216" text-anchor="middle">16-ch PWM LED driver</text>
+      <!-- power -->
+      <line class="v5"  x1="590" y1="170" x2="590" y2="55"/>
+      <text class="pin" x="566" y="186">V+ 5V</text>
+      <line class="v33" x1="685" y1="170" x2="685" y2="105"/>
+      <text class="pin" x="662" y="186">VCC 3V3</text>
+      <line class="gnd" x1="628" y1="370" x2="628" y2="510"/>
+      <text class="pin" x="614" y="362">GND</text>
+      <!-- i2c -->
+      <line class="i2c" x1="572" y1="370" x2="572" y2="420"/>
+      <text class="pin" x="552" y="362">SDA</text>
+      <line class="i2c" x1="600" y1="370" x2="600" y2="445"/>
+      <text class="pin" x="586" y="386">SCL</text>
+      <!-- outputs -->
+      <text class="lblm" x="690" y="335">OUT0&#8230;15</text>
+      <line class="wire" x1="725" y1="235" x2="770" y2="235"/>
+      <line class="wire" x1="725" y1="270" x2="770" y2="270"/>
+      <line class="wire" x1="725" y1="305" x2="770" y2="305"/>
+
+      <!-- ================= LEDs ================= -->
+      <rect class="box" x="770" y="200" width="90" height="150" rx="8"/>
+      <text class="lbl"  x="815" y="224" text-anchor="middle" font-weight="700">LEDs</text>
+      <text class="lblm" x="815" y="240" text-anchor="middle">on 5 V side</text>
+      <!-- common anode feed from 5V rail -->
+      <line class="v5" x1="815" y1="200" x2="815" y2="55"/>
+      <text class="lblm" x="783" y="196">anode &#8594; 5 V</text>
+      <!-- little LED glyphs -->
+      <polygon points="800,235 790,229 790,241" fill="#ff4d4d"/>
+      <polygon points="800,270 790,264 790,276" fill="#4dd164"/>
+      <polygon points="800,305 790,299 790,311" fill="#4da3ff"/>
+      <text class="lblm" x="806" y="335">+ resistors</text>
+
+      <!-- ================= I2C BUS ================= -->
+      <line class="i2c" x1="205" y1="420" x2="620" y2="420"/>
+      <line class="i2c" x1="205" y1="445" x2="620" y2="445"/>
+      <text class="pin" x="624" y="424" fill="#4da3ff">SDA</text>
+      <text class="pin" x="624" y="449" fill="#4da3ff">SCL</text>
+      <!-- pull-ups to 3.3 V -->
+      <line class="i2c" x1="300" y1="105" x2="300" y2="420"/>
+      <rect class="res" x="293" y="150" width="14" height="32" rx="3"/>
+      <line class="i2c" x1="315" y1="105" x2="315" y2="445"/>
+      <rect class="res" x="308" y="188" width="14" height="32" rx="3"/>
+      <text class="lblm" x="286" y="132">4.7k&#8486; &#8593; 3.3 V</text>
+      <!-- junctions -->
+      <circle class="jx" cx="300" cy="105" r="3"/>
+      <circle class="jx" cx="315" cy="105" r="3"/>
+      <circle class="jx" cx="230" cy="420" r="3"/>
+      <circle class="jx" cx="300" cy="420" r="3"/>
+      <circle class="jx" cx="375" cy="420" r="3"/>
+      <circle class="jx" cx="572" cy="420" r="3"/>
+      <circle class="jx" cx="258" cy="445" r="3"/>
+      <circle class="jx" cx="315" cy="445" r="3"/>
+      <circle class="jx" cx="405" cy="445" r="3"/>
+      <circle class="jx" cx="600" cy="445" r="3"/>
+
+      <!-- ================= LEGEND ================= -->
+      <rect class="box" x="690" y="430" width="170" height="72" rx="8"/>
+      <text class="lblm" x="702" y="450">Legend</text>
+      <line class="v5"  x1="702" y1="462" x2="730" y2="462"/><text class="pin" x="736" y="466">5 V</text>
+      <line class="v33" x1="702" y1="478" x2="730" y2="478"/><text class="pin" x="736" y="482">3.3 V</text>
+      <line class="gnd" x1="778" y1="462" x2="806" y2="462"/><text class="pin" x="812" y="466">GND</text>
+      <line class="i2c" x1="778" y1="478" x2="806" y2="478"/><text class="pin" x="812" y="482">I&#178;C</text>
+      <rect class="res" x="702" y="490" width="24" height="9" rx="2"/><text class="pin" x="732" y="499">resistor</text>
+    </svg>
+  </div>
+  <p class="note">Power flows up/down to the two horizontal rails; the blue I²C bus runs along the bottom with a
+  single pair of pull-ups to 3.3&nbsp;V. Both the PCF8575 and the PCA9685 hang off that same bus (different
+  addresses). The 5&nbsp;V rail feeds only the PCA9685's <code>V+</code> and the LEDs — it stops short of the PCF8575.</p>
+
+  <h2>Connections Summary</h2>
+  <table>
+    <thead><tr><th>From</th><th>To</th><th>Rail</th></tr></thead>
+    <tbody>
+      <tr><td>USB-C wall charger</td><td>ESP32-C3 (USB cable)</td><td>—</td></tr>
+      <tr><td>ESP32 <code>5V</code></td><td>PCA9685 <code>V+</code></td><td><span class="pill p5">5 V</span></td></tr>
+      <tr><td>ESP32 <code>3V3</code></td><td>PCF8575 <code>VCC</code> (bridge closed) &amp; PCA9685 <code>VCC</code></td><td><span class="pill p33">3.3 V</span></td></tr>
+      <tr><td>ESP32 <code>GND</code></td><td>PCF8575 <code>GND</code>, PCA9685 <code>GND</code>, LED supply GND</td><td>GND</td></tr>
+      <tr><td>ESP32 <code>GPIO4</code> (SDA)</td><td>PCF8575 <code>SDA</code> + PCA9685 <code>SDA</code></td><td>I²C</td></tr>
+      <tr><td>ESP32 <code>GPIO5</code> (SCL)</td><td>PCF8575 <code>SCL</code> + PCA9685 <code>SCL</code></td><td>I²C</td></tr>
+      <tr><td>4.7 kΩ ×2</td><td>SDA/SCL → 3.3 V (pull-ups)</td><td>I²C</td></tr>
+      <tr><td>PCA9685 <code>OUT0…15</code></td><td>LEDs (anode → 5 V, cathode → output)</td><td><span class="pill p5">5 V</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Why it's split this way</h2>
+  <ul>
+    <li><strong>3.3 V logic island.</strong> The C3's GPIOs aren't 5 V-tolerant. Keeping the PCF8575 (bridge
+      closed) and both I²C devices on one 3.3 V rail means SDA/SCL idle at 3.3 V — no level shifting, no risk.</li>
+    <li><strong>5 V only where it earns its keep.</strong> The USB-C wall plug's current headroom is for the
+      LEDs. That 5 V goes to the PCA9685's <code>V+</code> (the LED rail) and nowhere near the expander.</li>
+    <li><strong>One common ground.</strong> The two rails differ in voltage but must share a single ground
+      reference, or the PWM signals have nothing to switch against.</li>
+    <li><strong>PCA9685 has two supplies on purpose.</strong> <code>VCC</code> = logic (3.3 V, matches I²C),
+      <code>V+</code> = LED power (5 V). They're separate pins — don't tie them together.</li>
+  </ul>
+
+  <div class="card warn">
+    <strong>Never bridge the two worlds on a PCF8575 pin.</strong> The expander sinks current but barely
+    sources any, and its pins top out at its 3.3 V rail. If you drive an indicator straight off a P-pin, its
+    high side goes to the port <code>VDD</code> (3.3 V), <em>never</em> the 5 V rail. All 5 V LED current stays
+    on the PCA9685's <code>V+</code>. Per-LED resistor values and the sink-wiring detail are in
+    <code>pcf8575-led-wiring.html</code>.
+  </div>
+
+  <p class="note">Firmware note: initialise I²C with <code>Wire.begin(4, 5)</code> — GPIO4/5 avoid the C3's
+  strapping pins (GPIO2/8/9), and GPIO8/9 are already used for the status LED and BOOT button.</p>
+
+</div>
+</body>
+</html>
